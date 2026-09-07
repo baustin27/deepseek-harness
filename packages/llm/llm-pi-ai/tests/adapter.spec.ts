@@ -121,6 +121,7 @@ describe('PiAiAdapter provider routing', () => {
     await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(server.headers[0]?.['x-company']).toBe('private')
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
+    expect(server.headers[0]?.['x-dsh-request-id']).toMatch(/^[0-9a-f-]{36}$/)
   })
 
   it('forwards common stream options and profile reasoning', async () => {
