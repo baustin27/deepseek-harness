@@ -59,7 +59,19 @@ describe('provider retry policy', () => {
     expect(RetryPolicySchema).toBeDefined()
   })
 
-  it('ignores normal-only fields retained after switching to always mode', () => {
+  it('resolves and detaches an always-mode failure allowlist', () => {
+    const retryableCodes = ['TIMEOUT', 'TRANSPORT']
+    const policy = resolveRetryPolicy({ mode: 'always', retryableCodes }, 'provider.retryPolicy')
+    retryableCodes.push('SERVER')
+
+    expect(policy).toMatchObject({
+      mode: 'always',
+      retryableCodes: ['TIMEOUT', 'TRANSPORT'],
+    })
+    expect(Object.isFrozen(policy.retryableCodes)).toBe(true)
+  })
+
+  it('ignores maxRetries retained after switching to always mode', () => {
     const layered = {
       mode: 'always',
       maxRetries: 5,
@@ -68,6 +80,7 @@ describe('provider retry policy', () => {
 
     expect(resolveRetryPolicy(layered, 'provider.retryPolicy')).toEqual({
       mode: 'always',
+      retryableCodes: ['SERVER'],
       initialDelayMs: 500,
       maxDelayMs: 10_000,
       jitterRatio: 0.1,
@@ -88,6 +101,10 @@ describe('provider retry policy', () => {
     [{ mode: 'normal', retryableCodes: ['SERVER', 'SERVER'] }, /duplicates/],
     [{ mode: 'normal', retryableCodes: [''] }, /non-empty strings/],
     [{ mode: 'normal', retryableCodes: [429] }, /non-empty strings/],
+    [{ mode: 'always', retryableCodes: [] }, /must not be empty/],
+    [{ mode: 'always', retryableCodes: ['TIMEOUT', 'TIMEOUT'] }, /duplicates/],
+    [{ mode: 'always', retryableCodes: [''] }, /non-empty strings/],
+    [{ mode: 'always', retryableCodes: [429] }, /non-empty strings/],
     [{ mode: 'normal', maxRetires: 1 }, /unknown key "maxRetires"/],
     [{ mode: 'always', backoff: { initialDelay: 1 } }, /unknown key "initialDelay"/],
     [{ mode: 'sometimes' }, /mode must be "normal" or "always"/],

@@ -65,7 +65,13 @@ function localDelay(config: ResolvedRetryPolicy, retry: number, random: () => nu
 
 function retryPolicyKey(policy: ResolvedRetryPolicy): string {
   return policy.mode === 'always'
-    ? JSON.stringify([policy.mode, policy.initialDelayMs, policy.maxDelayMs, policy.jitterRatio])
+    ? JSON.stringify([
+      policy.mode,
+      policy.retryableCodes === undefined ? null : [...policy.retryableCodes].sort(),
+      policy.initialDelayMs,
+      policy.maxDelayMs,
+      policy.jitterRatio,
+    ])
     : JSON.stringify([
       policy.mode,
       policy.maxRetries,
@@ -209,8 +215,12 @@ export function apply(ctx: Context, config: Config = {}, internals: RetryInterna
           downstream.error,
         )
       }
+      const retryAllowed = policy.retryableCodes === undefined || policy.retryableCodes.includes(failure.code)
       if (downstream.type === 'decision' && downstream.decision?.kind === 'retry') {
-        return downstream.decision
+        return retryAllowed ? downstream.decision : undefined
+      }
+      if (!retryAllowed) {
+        return downstream.type === 'decision' ? downstream.decision : undefined
       }
     } else if (!policy.retryableCodes.includes(failure.code)) {
       return next()

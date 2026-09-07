@@ -47,8 +47,10 @@ export interface NormalRetryPolicyConfig {
 
 /** Unbounded retry behavior for every model-request failure on one provider route. */
 export interface AlwaysRetryPolicyConfig {
-  /** Retry every model-request failure until success, cancellation, or disposal. */
+  /** Retry eligible model-request failures until success, cancellation, or disposal. */
   mode: 'always'
+  /** Optional failure-code allowlist; omission preserves retry-everything behavior. */
+  retryableCodes?: string[]
   /** Local exponential-backoff and jitter configuration. */
   backoff?: BackoffConfig
 }
@@ -73,6 +75,7 @@ export interface ResolvedNormalRetryPolicy extends ResolvedRetryBackoff {
 /** Fully resolved unbounded retry policy. */
 export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {
   readonly mode: 'always'
+  readonly retryableCodes?: readonly string[]
 }
 
 /** Immutable provider policy captured when its adapter route is registered. */
@@ -93,6 +96,7 @@ const normalPolicySchema: z<NormalRetryPolicyConfig> = z.object({
 
 const alwaysPolicySchema: z<AlwaysRetryPolicyConfig> = z.object({
   mode: z.const('always').required(),
+  retryableCodes: z.array(z.string()),
   backoff: backoffSchema,
 })
 
@@ -140,6 +144,16 @@ function resolveBackoff(config: BackoffConfig | undefined, path: string): Resolv
   return Object.freeze({ initialDelayMs, maxDelayMs, jitterRatio })
 }
 
+function resolveRetryableCodes(codes: string[] | undefined, path: string): readonly string[] | undefined {
+  if (codes === undefined) return undefined
+  if (codes.length === 0) throw new Error(`${path} must not be empty`)
+  if (codes.some(code => typeof code !== 'string' || code.length === 0)) {
+    throw new Error(`${path} must contain only non-empty strings`)
+  }
+  if (new Set(codes).size !== codes.length) throw new Error(`${path} must not contain duplicates`)
+  return Object.freeze([...codes])
+}
+
 /**
  * Validate, default, and detach one provider-owned retry policy.
  * @param config - optional provider configuration; omission selects normal defaults.
@@ -185,8 +199,10 @@ export function resolveRetryPolicy(
     }
     case 'always':
       validateKeys(config, ALWAYS_POLICY_KEYS, path)
+      const retryableCodes = resolveRetryableCodes(config.retryableCodes, `${path}.retryableCodes`)
       return Object.freeze({
         mode: 'always',
+        ...(retryableCodes === undefined ? {} : { retryableCodes }),
         ...resolveBackoff(config.backoff, `${path}.backoff`),
       })
     default:

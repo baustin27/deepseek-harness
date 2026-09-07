@@ -139,9 +139,13 @@ function normalConfig(
   }
 }
 
-function alwaysConfig(backoff: BackoffConfig = {}): AlwaysRetryPolicyConfig {
+function alwaysConfig(
+  backoff: BackoffConfig = {},
+  retryableCodes?: string[],
+): AlwaysRetryPolicyConfig {
   return {
     mode: 'always',
+    ...(retryableCodes === undefined ? {} : { retryableCodes }),
     backoff: {
       initialDelayMs: 500,
       maxDelayMs: 10_000,
@@ -690,6 +694,52 @@ describe('provider-routed retry policy', () => {
       { provider: 'mock', mode: 'always', retry: 3, delayMs: 4, hasMax: false },
       { provider: 'mock', mode: 'always', retry: 4, delayMs: 4, hasMax: false },
     ])
+  })
+
+  it('limits always mode to transient failures when an allowlist is configured', async () => {
+    vi.useFakeTimers()
+    const adapter = new ScriptedAdapter([
+      new LlmError('bad request', 'AUTH'),
+      textResponse('must not retry'),
+    ])
+    ;({ ctx: context } = await harness(adapter, { mock: alwaysConfig({
+      initialDelayMs: 1,
+      maxDelayMs: 1,
+    }, ['TIMEOUT', 'TRANSPORT']) }))
+    const agent = await context.agentLoop.create(SessionId('retry-always-transient-only'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'do not spin' }], source: { kind: 'user' } }))
+    await vi.runAllTimersAsync()
+    await waitForIdle(context, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry')).toHaveLength(0)
+    expect(agent.session.snapshotEvents()).toContainEqual(expect.objectContaining({
+      type: 'turn/end',
+      data: expect.objectContaining({ reason: expect.objectContaining({ kind: 'error' }) }),
+    }))
+  })
+
+  it('does not let downstream recovery bypass an always-mode allowlist', async () => {
+    const adapter = new ScriptedAdapter([
+      new LlmError('bad request', 'AUTH'),
+      textResponse('must not retry'),
+    ])
+    ;({ ctx: context } = await harness(adapter, { mock: alwaysConfig({}, ['TIMEOUT', 'TRANSPORT']) }))
+    context.on('agent/request-error', async () => ({ kind: 'retry' }))
+    const agent = await context.agentLoop.create(SessionId('retry-always-allowlist-composition'), {
+      provider: 'mock',
+      model: 'mock',
+    })
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'do not spin' }], source: { kind: 'user' } }))
+    await waitForIdle(context, agent)
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry')).toHaveLength(0)
   })
 
   it('keeps failed error text and partial output out of every retried model context', async () => {
