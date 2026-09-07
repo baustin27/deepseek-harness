@@ -27,6 +27,7 @@
  */
 
 import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
+import { randomUUID } from 'node:crypto'
 import type {
   Api,
   AuthContext,
@@ -43,6 +44,7 @@ import {
   contentHasImage,
   LlmAdapter,
   LlmError,
+  ProviderRequestId,
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type {
@@ -202,12 +204,15 @@ function reasoningInfo(
 }
 
 /** Merge deployment headers while removing case-insensitive attribution collisions. */
-function requestHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
+function requestHeaders(headers: Readonly<Record<string, string>> | undefined, requestId: string): Record<string, string> {
   const attribution = attributionHeaders()
   const reserved = new Set(Object.keys(attribution).map(name => name.toLowerCase()))
   return {
     ...Object.fromEntries(Object.entries(headers ?? {}).filter(([name]) => !reserved.has(name.toLowerCase()))),
     ...attribution,
+    // Correlates a Harness stream with Atlas edge:request and hop telemetry.
+    // This is transport metadata only; it never reaches the model context.
+    'x-dsh-request-id': requestId,
   }
 }
 
@@ -341,6 +346,7 @@ export class PiAiAdapter extends LlmAdapter {
       options.reasoningEffort ?? profile.reasoning,
     )
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
+    const requestId = randomUUID()
 
     const consumer = new AbortController()
     const upstream = options.signal === undefined
@@ -383,7 +389,7 @@ export class PiAiAdapter extends LlmAdapter {
         signal: streamSignal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
+        headers: requestHeaders(profile.headers, requestId),
       })
       const iterator = toStreamChunks(events, model.contextWindow, options.signal)[Symbol.asyncIterator]()
       let exhausted = false
@@ -410,7 +416,7 @@ export class PiAiAdapter extends LlmAdapter {
       }
     } catch (error: unknown) {
       if (watchdog !== undefined && timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT') !== undefined) {
-        throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
+        throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error, requestId: ProviderRequestId(requestId) })
       }
       if (options.signal?.aborted) {
         throw new LlmError('pi-ai request aborted by caller', 'ABORTED', { cause: error })
