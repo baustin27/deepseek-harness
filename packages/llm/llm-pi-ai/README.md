@@ -54,6 +54,9 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
         models:
           - id: claude-sonnet-4-5
             contextWindow: 200000
+      atlas:
+        streamIdleTimeoutByModel:
+          muse-spark-1.3-contributor-free: false # Atlas owns Zen proxy failover; caller cancellation still stops the request
       acme-gateway:
         displayName: Acme Gateway
         apiKeyEnv: ACME_GATEWAY_API_KEY
@@ -84,6 +87,8 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 | `requestImagePixelBudget` | `4,194,304` | Total-pixel budget for each deterministic request image |
 | `requestImageMaxBytes` | `1 MiB` | Encoded-byte target for each request image before base64 expansion |
 | `maxRequestImageBytes` | `20 MiB` | Aggregate base64 image-payload bound with oldest-first offload |
+| `streamIdleTimeoutMs` | `300,000 ms` | Maximum silence between yielded provider chunks; `false` leaves the route to caller cancellation |
+| `streamIdleTimeoutByModel` | none | Per-model `streamIdleTimeoutMs` overrides; every key must name a configured model |
 | `retryPolicy` | normal, 5 retries | Provider-owned retry policy executed by `dsh-llm-retry` |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-llm-pi-ai) is the exhaustive source for every accepted field and its JSDoc.

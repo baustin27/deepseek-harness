@@ -1103,8 +1103,10 @@ export interface PiAiProviderProfile {
   timeoutMs?: number
   /** WebSocket connection timeout in milliseconds. */
   websocketConnectTimeoutMs?: number
-  /** Maximum provider idle time while one stream read is outstanding. */
-  streamIdleTimeoutMs?: number
+  /** Maximum provider idle time while one stream read is outstanding, or `false` to leave stream lifetime to caller cancellation. */
+  streamIdleTimeoutMs?: number | false
+  /** Per-model overrides for {@link streamIdleTimeoutMs}; an unknown model id is refused during profile resolution. */
+  streamIdleTimeoutByModel?: Record<string, number | false>
   /**
    * Maximum base64-encoded image payload per request. When a request's
    * accumulated images exceed it, the oldest images are replaced by text
@@ -1276,7 +1278,7 @@ export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFo
 
 Depends on: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`)
 
-Source: [`packages/llm/llm-pi-ai/src/config.ts:216`](../packages/llm/llm-pi-ai/src/config.ts)
+Source: [`packages/llm/llm-pi-ai/src/config.ts:220`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 
@@ -3197,6 +3199,8 @@ Requires: `web`
 ```ts config-catalog
 /** Plugin config (all optional — `apply` fills env-var and constant defaults). */
 export interface Config {
+  /** Search wire protocol. `atlas-searxng` uses Atlas's GET `/v1/search` facade. */
+  transport?: 'deepseek' | 'atlas-searxng'
   /** Literal DeepSeek API key; prefer {@link apiKeyEnv} so no secret enters configuration files. */
   apiKey?: string
   /** Credential reference resolved for each search; defaults to `DEEPSEEK_API_KEY`. */

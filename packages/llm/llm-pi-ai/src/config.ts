@@ -158,8 +158,10 @@ export interface PiAiProviderProfile {
   timeoutMs?: number
   /** WebSocket connection timeout in milliseconds. */
   websocketConnectTimeoutMs?: number
-  /** Maximum provider idle time while one stream read is outstanding. */
-  streamIdleTimeoutMs?: number
+  /** Maximum provider idle time while one stream read is outstanding, or `false` to leave stream lifetime to caller cancellation. */
+  streamIdleTimeoutMs?: number | false
+  /** Per-model overrides for {@link streamIdleTimeoutMs}; an unknown model id is refused during profile resolution. */
+  streamIdleTimeoutByModel?: Record<string, number | false>
   /**
    * Maximum base64-encoded image payload per request. When a request's
    * accumulated images exceed it, the oldest images are replaced by text
@@ -187,8 +189,10 @@ export interface ResolvedPiAiProviderProfile
   displayName: string
   /** Validated credential reference, when one is configured. */
   apiKeyEnv?: CredentialRef
-  /** Positive finite provider-idle interval after defaulting. */
-  streamIdleTimeoutMs: number
+  /** Positive finite provider-idle interval after defaulting, or `false` when the route disables adapter-owned idle cancellation. */
+  streamIdleTimeoutMs: number | false
+  /** Validated per-model idle intervals, falling back to {@link streamIdleTimeoutMs}. */
+  streamIdleTimeoutByModel: Readonly<Record<string, number | false>>
   /** Positive request-level base64 image payload bound after defaulting. */
   maxRequestImageBytes: number
   /** Positive total-pixel request-version budget after defaulting. */
@@ -329,7 +333,11 @@ const profile = z.object({
   transport: z.union(['sse', 'websocket', 'websocket-cached', 'auto']),
   timeoutMs: z.natural(),
   websocketConnectTimeoutMs: z.natural(),
-  streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  streamIdleTimeoutMs: z.union([
+    z.const(false),
+    z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS),
+  ]).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  streamIdleTimeoutByModel: z.dict(z.union([z.const(false), z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS)])),
   maxRequestImageBytes: z.number().step(1).min(1).default(DEFAULT_MAX_REQUEST_IMAGE_BYTES),
   requestImagePixelBudget: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET),
   requestImageMaxBytes: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_MAX_BYTES),
@@ -415,14 +423,15 @@ export function resolveProfiles(
       throw new Error(`llm-pi-ai: provider "${provider}" has an empty displayName`)
     }
     assertValidHeaders(provider, source.headers)
-    const streamIdleTimeoutMs = source.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
-    if (!Number.isFinite(streamIdleTimeoutMs)
-      || streamIdleTimeoutMs <= 0
-      || streamIdleTimeoutMs > MAX_TIMER_DELAY_MS) {
-      throw new Error(
-        `llm-pi-ai: provider "${provider}" streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
-      )
+    const validateStreamIdleTimeout = (value: number | false, path: string): void => {
+      if (value !== false && (!Number.isFinite(value)
+        || value <= 0
+        || value > MAX_TIMER_DELAY_MS)) {
+        throw new Error(`${path} must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
+      }
     }
+    const streamIdleTimeoutMs = source.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
+    validateStreamIdleTimeout(streamIdleTimeoutMs, `llm-pi-ai: provider "${provider}" streamIdleTimeoutMs`)
     const maxRequestImageBytes = source.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES
     if (!Number.isInteger(maxRequestImageBytes) || maxRequestImageBytes <= 0) {
       throw new Error(`llm-pi-ai: provider "${provider}" maxRequestImageBytes must be a positive integer`)
@@ -459,6 +468,14 @@ export function resolveProfiles(
       defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
       defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
     })
+    const streamIdleTimeoutByModel: Record<string, number | false> = {}
+    for (const [modelId, timeoutMs] of Object.entries(source.streamIdleTimeoutByModel ?? {})) {
+      if (!catalog.models.some(model => model.id === modelId)) {
+        throw new Error(`llm-pi-ai: provider "${provider}" streamIdleTimeoutByModel names unconfigured model "${modelId}"`)
+      }
+      validateStreamIdleTimeout(timeoutMs, `llm-pi-ai: provider "${provider}" streamIdleTimeoutByModel.${modelId}`)
+      streamIdleTimeoutByModel[modelId] = timeoutMs
+    }
     const { apiKeyEnv, retryPolicy, models: _models, displayName: _displayName, ...rest } = source
     resolved.set(provider, {
       ...rest,
@@ -466,6 +483,7 @@ export function resolveProfiles(
       displayName,
       ...apiKeyEnv === undefined ? {} : { apiKeyEnv: credentialRef(apiKeyEnv) },
       streamIdleTimeoutMs,
+      streamIdleTimeoutByModel,
       maxRequestImageBytes,
       requestImagePixelBudget,
       requestImageMaxBytes,

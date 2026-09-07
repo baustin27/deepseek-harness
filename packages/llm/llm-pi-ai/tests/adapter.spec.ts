@@ -428,6 +428,18 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/chat/completions'])
     expect(server.closedResponses).toBe(1)
   })
+
+  it('lets one route model disable the adapter idle watchdog', async () => {
+    const server = await mockServer([{ events: textEvents, delayMs: 50 }])
+    const ctx = await harness(server.url, {
+      streamIdleTimeoutByModel: { 'deepseek-v4-flash': false },
+    })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+  })
 })
 
 describe('provider profile lifecycle', () => {
@@ -943,6 +955,15 @@ describe('provider profile lifecycle', () => {
   })
 
   it('validates profiles at the shared resolver boundary', () => {
+    expect(resolveProfiles({
+      openai: { streamIdleTimeoutMs: false },
+    }).get('openai')?.streamIdleTimeoutMs).toBe(false)
+    expect(resolveProfiles({
+      deepseek: { streamIdleTimeoutByModel: { 'deepseek-v4-flash': false } },
+    }).get('deepseek')?.streamIdleTimeoutByModel).toEqual({ 'deepseek-v4-flash': false })
+    expect(() => resolveProfiles({
+      deepseek: { streamIdleTimeoutByModel: { missing: false } },
+    })).toThrow(/streamIdleTimeoutByModel names unconfigured model/)
     expect(() => resolveProfiles({
       openai: { streamIdleTimeoutMs: 0 },
     })).toThrow(/streamIdleTimeoutMs.*positive finite/)

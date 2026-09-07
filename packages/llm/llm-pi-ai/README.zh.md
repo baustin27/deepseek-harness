@@ -54,6 +54,9 @@ kind: "package-reference"
         models:
           - id: claude-sonnet-4-5
             contextWindow: 200000
+      atlas:
+        streamIdleTimeoutByModel:
+          muse-spark-1.3-contributor-free: false # Atlas owns Zen proxy failover; caller cancellation still stops the request
       acme-gateway:
         displayName: Acme Gateway
         apiKeyEnv: ACME_GATEWAY_API_KEY
@@ -84,6 +87,8 @@ kind: "package-reference"
 | `requestImagePixelBudget` | `4,194,304` | 每张确定性请求图片的总像素预算 |
 | `requestImageMaxBytes` | `1 MiB` | 每张请求图片在 base64 扩展前的编码字节目标 |
 | `maxRequestImageBytes` | `20 MiB` | 带最旧优先卸载的 base64 图片载荷总上限 |
+| `streamIdleTimeoutMs` | `300,000 ms` | 两个已产出提供方分片之间允许的最长静默；`false` 交由调用方取消 |
+| `streamIdleTimeoutByModel` | 无 | 按模型覆盖 `streamIdleTimeoutMs`；每个键都必须点名已配置模型 |
 | `retryPolicy` | normal，5 次重试 | 由 `dsh-llm-retry` 执行的提供方自有重试策略 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-llm-pi-ai)是每个受支持字段及其 JSDoc 的穷尽式真源。

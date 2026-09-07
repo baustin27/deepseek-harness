@@ -346,8 +346,11 @@ export class PiAiAdapter extends LlmAdapter {
     const upstream = options.signal === undefined
       ? consumer.signal
       : AbortSignal.any([options.signal, consumer.signal])
-    const streamIdleTimeoutMs = profile.streamIdleTimeoutMs
-    using watchdog = idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
+    const streamIdleTimeoutMs = profile.streamIdleTimeoutByModel[model.id] ?? profile.streamIdleTimeoutMs
+    const watchdog = streamIdleTimeoutMs === false
+      ? undefined
+      : idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
+    const streamSignal = watchdog?.signal ?? upstream
 
     try {
       const containsImage = options.messages.some(message => contentHasImage(message.content))
@@ -363,7 +366,7 @@ export class PiAiAdapter extends LlmAdapter {
       }
       const context = attachments === undefined
         ? toPiContext(options, undefined, onReplayDegrade)
-        : await toPiContext({ ...options, signal: watchdog.signal }, {
+        : await toPiContext({ ...options, signal: streamSignal }, {
           attachments,
           resolveImageAccess: ref => this.config.resolveImageAccess?.(attachments, ref),
           maxRequestImageBytes: profile.maxRequestImageBytes,
@@ -377,7 +380,7 @@ export class PiAiAdapter extends LlmAdapter {
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
-        signal: watchdog.signal,
+        signal: streamSignal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
         headers: requestHeaders(profile.headers),
@@ -386,8 +389,8 @@ export class PiAiAdapter extends LlmAdapter {
       let exhausted = false
       try {
         while (true) {
-          const result = await watchdog.next(iterator)
-          const timeout = timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')
+          const result = watchdog === undefined ? await iterator.next() : await watchdog.next(iterator)
+          const timeout = watchdog === undefined ? undefined : timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT')
           if (timeout !== undefined) throw timeout
           if (result.done) {
             exhausted = true
@@ -406,7 +409,7 @@ export class PiAiAdapter extends LlmAdapter {
         }
       }
     } catch (error: unknown) {
-      if (timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT') !== undefined) {
+      if (watchdog !== undefined && timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT') !== undefined) {
         throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
       }
       if (options.signal?.aborted) {
@@ -415,6 +418,7 @@ export class PiAiAdapter extends LlmAdapter {
       throw error
     } finally {
       consumer.abort('pi-ai stream consumer stopped')
+      watchdog?.[Symbol.dispose]()
     }
   }
 }
