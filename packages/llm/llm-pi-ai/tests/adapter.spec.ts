@@ -44,12 +44,12 @@ class MappedFileSystem extends Service {
   }
 }
 
-async function harness(baseURL: string, overrides: Record<string, unknown> = {}): Promise<Context> {
+async function harness(baseURL: string, overrides: Record<string, unknown> = {}, provider = 'deepseek'): Promise<Context> {
   vi.stubEnv('PI_TEST_KEY', 'test-key')
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(LlmPiAi, {
-    providers: { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL, ...overrides } },
+    providers: { [provider]: { apiKeyEnv: 'PI_TEST_KEY', baseURL, ...overrides } },
   })
   return ctx
 }
@@ -122,6 +122,21 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.headers[0]?.['x-company']).toBe('private')
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
     expect(server.headers[0]?.['x-dsh-request-id']).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('forwards the DSH session identity only to the Atlas OpenCode route', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, {
+      api: 'openai-completions',
+      models: [{ id: 'atlas-test-model', name: 'Atlas test model', contextWindow: 4096 }],
+    }, 'atlas')
+    await assemble(ctx, {
+      provider: 'atlas',
+      model: 'atlas-test-model',
+      messages: [],
+      sessionId: 'session-user-42' as never,
+    })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('session-user-42')
   })
 
   it('forwards common stream options and profile reasoning', async () => {

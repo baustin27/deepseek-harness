@@ -204,7 +204,12 @@ function reasoningInfo(
 }
 
 /** Merge deployment headers while removing case-insensitive attribution collisions. */
-function requestHeaders(headers: Readonly<Record<string, string>> | undefined, requestId: string): Record<string, string> {
+function requestHeaders(
+  provider: string,
+  headers: Readonly<Record<string, string>> | undefined,
+  requestId: string,
+  sessionId: string | undefined,
+): Record<string, string> {
   const attribution = attributionHeaders()
   const reserved = new Set(Object.keys(attribution).map(name => name.toLowerCase()))
   return {
@@ -213,6 +218,12 @@ function requestHeaders(headers: Readonly<Record<string, string>> | undefined, r
     // Correlates a Harness stream with Atlas edge:request and hop telemetry.
     // This is transport metadata only; it never reaches the model context.
     'x-dsh-request-id': requestId,
+    // The Atlas route is OpenCode-compatible. DSH owns the conversation
+    // session, so carry that identity across the generic pi-ai boundary;
+    // other providers must not receive OpenCode-specific headers.
+    ...provider === 'atlas' && sessionId !== undefined
+      ? { 'x-opencode-session': sessionId }
+      : {},
   }
 }
 
@@ -389,7 +400,12 @@ export class PiAiAdapter extends LlmAdapter {
         signal: streamSignal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers, requestId),
+        headers: requestHeaders(
+          options.provider,
+          profile.headers,
+          requestId,
+          options.sessionId === undefined ? undefined : String(options.sessionId),
+        ),
       })
       const iterator = toStreamChunks(events, model.contextWindow, options.signal)[Symbol.asyncIterator]()
       let exhausted = false
