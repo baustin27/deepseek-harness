@@ -376,14 +376,14 @@ export async function discoverModels(
     // capacities and names when Atlas has a matching catalog entry.
     return discovered.map((model) => {
       const installed = installedById?.get(model.id)
-      return installed === undefined
-        ? model
-        : {
-          ...model,
-          name: model.name === model.id ? installed.name : model.name,
-          ...model.contextWindow === undefined && installed.contextWindow !== undefined ? { contextWindow: installed.contextWindow } : {},
-          ...model.maxTokens === undefined && installed.maxTokens !== undefined ? { maxTokens: installed.maxTokens } : {},
-        }
+      if (installed === undefined) return model
+      const name = model.name === model.id ? installed.name : model.name
+      return {
+        ...model,
+        ...(name === undefined ? {} : { name }),
+        ...model.contextWindow === undefined && installed.contextWindow !== undefined ? { contextWindow: installed.contextWindow } : {},
+        ...model.maxTokens === undefined && installed.maxTokens !== undefined ? { maxTokens: installed.maxTokens } : {},
+      }
     })
   }
   return discovered

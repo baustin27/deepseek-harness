@@ -191,6 +191,36 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
+  // Atlas hot-swaps local lanes behind one stable OpenAI-compatible route.
+  // Keep its model capacities live so aliases such as `auto` do not inherit
+  // the optimistic 131k route default when the selected lane is a 32k slot.
+  let atlasContextCache: { baseURL: string; expiresAt: number; values: ReadonlyMap<string, number> } | undefined
+  const resolveLiveContext = async (
+    provider: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<number | undefined> => {
+    if (provider !== 'atlas') return undefined
+    const profile = profiles().get(provider)
+    if (profile === undefined || profile.baseURL === undefined) return undefined
+    if (atlasContextCache === undefined || atlasContextCache.baseURL !== profile.baseURL || atlasContextCache.expiresAt <= Date.now()) {
+      const apiKey = await resolveApiKey(provider, profile)
+      const discovered = await discoverModels({
+        provider,
+        baseURL: profile.baseURL,
+        ...profile.api === undefined ? {} : { api: profile.api },
+        ...signal === undefined ? {} : { signal },
+        ...apiKey === undefined ? {} : { apiKey },
+      })
+      const values = new Map<string, number>()
+      for (const entry of discovered) {
+        if (entry.contextWindow !== undefined) values.set(entry.id, entry.contextWindow)
+      }
+      atlasContextCache = { baseURL: profile.baseURL, expiresAt: Date.now() + 15_000, values }
+    }
+    return atlasContextCache.values.get(model)
+  }
+
   // One store and one ambient context for the whole plugin instance: both read
   // through `ctx` per call, so they stay correct across the collection rebuilds
   // a configuration change causes, and a sign-in survives one.
@@ -199,6 +229,7 @@ export function apply(ctx: Context, config: Config): void {
     profiles,
     resolveApiKey,
     auth,
+    resolveLiveContext,
     resolveAttachments: () => ctx.get('attachments'),
     resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(
       attachments,

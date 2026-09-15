@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-15-atlas-live-context-compaction-recovery.md
+2026-09-15-atlas-live-context-compaction-recovery.md: cc6019b34c18fed1bc3da89000fdf06879f70bfb
+2026-09-15-atlas-live-context-compaction-recovery.zh.md: b5ee3973d331e965e40f0ac95dd075e769e6aa2a

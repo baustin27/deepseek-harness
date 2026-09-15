@@ -103,6 +103,8 @@ export interface PiAiAdapterOptions {
    * conversion because its stored replay state is unusable by this build.
    */
   onReplayDegrade?: (detail: { provider: string; model: string; reason: string }) => void
+  /** Best-effort live capacity lookup for hot-swappable routes such as Atlas. */
+  resolveLiveContext?: (provider: string, model: string, signal?: AbortSignal) => Promise<number | undefined>
 }
 
 /** The two auth injectables a pi-ai collection is built with. */
@@ -234,6 +236,7 @@ function requestHeaders(
  */
 export class PiAiAdapter extends LlmAdapter {
   private snapshot: PiAiSnapshot | undefined
+  private readonly liveContext = new Map<string, { contextWindow?: number; expiresAt: number }>()
 
   constructor(private readonly config: PiAiAdapterOptions) {
     super()
@@ -302,13 +305,14 @@ export class PiAiAdapter extends LlmAdapter {
     model: string,
     _signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve().then(() => {
+    return (async () => {
       const snapshot = this.current()
-      return this.modelInfo(snapshot, provider, model)
-    })
+      const contextWindow = await this.liveContextFor(provider, model, _signal)
+      return this.modelInfo(snapshot, provider, model, contextWindow)
+    })()
   }
 
-  private modelInfo(snapshot: PiAiSnapshot, provider: string, model: string): LlmResolvedModelInfo {
+  private modelInfo(snapshot: PiAiSnapshot, provider: string, model: string, liveContextWindow?: number): LlmResolvedModelInfo {
     const profile = this.profileOf(snapshot, provider)
     const resolvedModel = this.modelOf(snapshot, provider, model)
     const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning)
@@ -320,18 +324,42 @@ export class PiAiAdapter extends LlmAdapter {
       id: model,
       name: resolvedModel.name,
       inputModalities: [...resolvedModel.input],
-      context: { contextWindow: resolvedModel.contextWindow },
+      context: { contextWindow: liveContextWindow ?? resolvedModel.contextWindow },
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
       ...reasoningInfo(resolvedModel, defaultLevel),
     }
   }
 
-  override prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
+  override async prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
     const snapshot = this.current()
+    const contextWindow = await this.liveContextFor(provider, model, _signal)
     return Promise.resolve({
-      model: this.modelInfo(snapshot, provider, model),
-      stream: options => this.streamWithSnapshot(options, snapshot),
+      model: this.modelInfo(snapshot, provider, model, contextWindow),
+      stream: options => this.streamWithSnapshot(options, snapshot, contextWindow),
     })
+  }
+
+  private async liveContextFor(provider: string, model: string, signal?: AbortSignal): Promise<number | undefined> {
+    const resolver = this.config.resolveLiveContext
+    // Explicit model profiles already carry an operator-selected capacity.
+    // Atlas's automatic aliases are the hot-swappable case where only the
+    // live route can tell us which lane will receive the request.
+    if (resolver === undefined || (provider === 'atlas' && model !== 'auto' && model !== 'auto-free')) return undefined
+    const key = `${provider}\u0000${model}`
+    const cached = this.liveContext.get(key)
+    if (cached !== undefined && cached.expiresAt > Date.now()) return cached.contextWindow
+    try {
+      const contextWindow = await resolver(provider, model, signal)
+      this.liveContext.set(key, {
+        expiresAt: Date.now() + 15_000,
+        ...(contextWindow === undefined ? {} : { contextWindow }),
+      })
+      return contextWindow
+    } catch {
+      // Live metadata is advisory; retain the configured capacity on failures.
+      this.liveContext.set(key, { expiresAt: Date.now() + 5_000 })
+      return undefined
+    }
   }
 
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -341,6 +369,7 @@ export class PiAiAdapter extends LlmAdapter {
   private async * streamWithSnapshot(
     options: GenerateOptions,
     snapshot: PiAiSnapshot,
+    preparedContextWindow?: number,
   ): AsyncIterable<StreamChunk> {
     if (options.stop !== undefined) {
       throw new LlmError('llm-pi-ai does not support GenerateOptions.stop', 'UNSUPPORTED_OPTION')
@@ -351,7 +380,11 @@ export class PiAiAdapter extends LlmAdapter {
     // mid-request builds a separate snapshot, so this request finishes under
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
-    const model = this.modelOf(snapshot, options.provider, options.model)
+    const modelBase = this.modelOf(snapshot, options.provider, options.model)
+    const liveContextWindow = preparedContextWindow ?? await this.liveContextFor(options.provider, options.model, options.signal)
+    const model = liveContextWindow === undefined
+      ? modelBase
+      : { ...modelBase, contextWindow: liveContextWindow }
     const reasoning = resolveReasoningLevel(
       model,
       options.reasoningEffort ?? profile.reasoning,
