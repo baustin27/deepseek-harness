@@ -153,6 +153,19 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/models'])
   })
 
+  it('uses the smallest concrete Atlas capacity when an automatic alias has no row', async () => {
+    const server = await mockServer([
+      { body: JSON.stringify({ data: [{ id: 'muse-glimmer-30b-ud-iq2-xxs', context_window: 32768 }] }) },
+    ])
+    const ctx = await harness(server.url, {
+      api: 'openai-completions',
+      models: [{ id: 'auto', name: 'Atlas auto', contextWindow: 131072 }],
+    }, 'atlas')
+    await expect(ctx.llm.resolveModelInfo('atlas', 'auto')).resolves.toMatchObject({
+      context: { contextWindow: 32768 },
+    })
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {
