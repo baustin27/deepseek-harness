@@ -74,6 +74,25 @@ async function harness(): Promise<Context> {
 }
 
 describe('catalog-route model discovery', () => {
+  it('refreshes the live Atlas catalog while enriching known local lanes', async () => {
+    const server = await listingServer({
+      body: JSON.stringify({ data: [
+        { id: 'atlas-live-lane', name: 'Live local lane' },
+        { id: 'atlas-known', context_length: 131_072 },
+      ] }),
+    })
+    const ctx = await harness()
+
+    const models = await ctx.llm.discoverModels('llm-pi-ai', {
+      provider: 'atlas',
+      baseURL: server.url,
+      api: 'openai-completions',
+    })
+
+    expect(models.map(model => model.id)).toEqual(['atlas-live-lane', 'atlas-known'])
+    expect(server.paths).toEqual(['/models'])
+  })
+
   it('answers from the installed registry, with capacities and no network call', async () => {
     const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'from-the-endpoint' }] }) })
     const ctx = await harness()

@@ -42,6 +42,14 @@ const LISTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
   'openai-responses',
 ])
 
+/**
+ * Atlas is a live local gateway: its model directory changes when a lane is
+ * swapped, so the installed provider entries are only metadata/fallbacks.
+ * Other pi-ai catalog providers remain offline because their catalogs carry
+ * authoritative capacities that their public listing endpoints omit.
+ */
+const LIVE_CATALOG_PROVIDERS: ReadonlySet<string> = new Set(['atlas'])
+
 /** Stable API version required by Anthropic's model-listing endpoint. */
 const ANTHROPIC_VERSION = '2023-06-01'
 
@@ -270,11 +278,15 @@ export async function discoverModels(
   request: LlmModelDiscoveryOperation,
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
 ): Promise<readonly LlmDiscoveredModel[]> {
-  // A catalog route already has its answer, and a better one: the installed
-  // entries carry context windows and output caps no listing endpoint reports.
+  // A catalog route usually already has its answer, and a better one: the
+  // installed entries carry context windows and output caps no listing
+  // endpoint reports. Atlas is the exception because its local lanes are
+  // hot-swappable and must be discovered from its live /v1/models directory.
+  let installedById: ReturnType<typeof catalogModels> | undefined
   if (request.provider !== undefined) {
     const installed = catalogModels(request.provider)
-    if (installed.size > 0) {
+    installedById = installed
+    if (installed.size > 0 && !LIVE_CATALOG_PROVIDERS.has(request.provider)) {
       return [...installed.values()].map(model => ({
         id: model.id,
         name: model.name,
@@ -358,5 +370,21 @@ export async function discoverModels(
   } catch (error: unknown) {
     throw new LlmError(`${url} did not answer with JSON`, 'DISCOVERY_FAILED', { cause: error })
   }
-  return readListing(body)
+  const discovered = readListing(body)
+  if (request.provider !== undefined && installedById !== undefined) {
+    // Keep the endpoint's live IDs/order, enriching rows with configured
+    // capacities and names when Atlas has a matching catalog entry.
+    return discovered.map((model) => {
+      const installed = installedById?.get(model.id)
+      return installed === undefined
+        ? model
+        : {
+          ...model,
+          name: model.name === model.id ? installed.name : model.name,
+          ...model.contextWindow === undefined && installed.contextWindow !== undefined ? { contextWindow: installed.contextWindow } : {},
+          ...model.maxTokens === undefined && installed.maxTokens !== undefined ? { maxTokens: installed.maxTokens } : {},
+        }
+    })
+  }
+  return discovered
 }
