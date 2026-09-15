@@ -20,6 +20,9 @@ DSH pi-ai 适配器以短缓存从实时模型列表刷新 Atlas 自动别名容
 用于请求元数据和 pi-ai 的流溢出判断。通用错误分类器识别
 `context too long/large`，因此现有的溢出压缩与重试路径可以处理网关的 HTTP 400。
 
+DSH 会话模型目录和 Atlas TypeScript SDK 保留相同的可选 `contextWindow` 字段，
+因此浏览器客户端、连接消费者和直接 SDK 调用方无需第二种发现协议即可看到容量。
+
 ## Alternatives considered
 
 **提高 DSH 静态默认值。** 否决，因为 Atlas 选择较小本地槽位时会更容易失败。

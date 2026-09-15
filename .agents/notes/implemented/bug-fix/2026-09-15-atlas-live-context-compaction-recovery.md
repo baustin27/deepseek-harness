@@ -24,6 +24,10 @@ stream overflow accounting. The generic error classifier recognizes
 `context too long/large`, so the existing overflow compaction-and-retry path
 handles the gateway's HTTP 400 wording.
 
+The DSH session model catalog and Atlas TypeScript SDK preserve the same
+optional `contextWindow` field, so browser clients, connection consumers, and
+direct SDK callers see the capacity without a second discovery protocol.
+
 ## Alternatives considered
 
 **Raise the DSH static default.** Rejected because it makes the failure more
