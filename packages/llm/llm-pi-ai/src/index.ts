@@ -218,7 +218,15 @@ export function apply(ctx: Context, config: Config): void {
       }
       atlasContextCache = { baseURL: profile.baseURL, expiresAt: Date.now() + 15_000, values }
     }
-    return atlasContextCache.values.get(model)
+    const exact = atlasContextCache.values.get(model)
+    if (exact !== undefined) return exact
+    // Atlas may publish an automatic alias without repeating metadata on the
+    // alias row. Its concrete local rows still provide a safe lower bound.
+    if (model === 'auto' || model === 'auto-free') {
+      const local = [...atlasContextCache.values.values()]
+      if (local.length > 0) return Math.min(...local)
+    }
+    return undefined
   }
 
   // One store and one ambient context for the whole plugin instance: both read
