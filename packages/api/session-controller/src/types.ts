@@ -123,6 +123,8 @@ export interface ModelCatalogModel {
   readonly id: string
   readonly name: string
   readonly description?: string
+  /** Current provider-owned request context capacity, when resolved. */
+  readonly contextWindow?: number
   readonly reasoning?: ModelReasoning
 }
 
