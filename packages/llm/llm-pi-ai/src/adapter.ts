@@ -62,6 +62,8 @@ import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attac
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { toPiContext } from './context.ts'
+import { discoverModels } from './discovery.ts'
+import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 import { toStreamChunks } from './stream.ts'
 
 /** One resolution's frozen view: the profiles and the collection built from them. */
@@ -237,6 +239,8 @@ function requestHeaders(
 export class PiAiAdapter extends LlmAdapter {
   private snapshot: PiAiSnapshot | undefined
   private readonly liveContext = new Map<string, { contextWindow?: number; expiresAt: number }>()
+  private readonly liveModels = new Map<string, { models: readonly Model<Api>[]; expiresAt: number }>()
+  private atlasRefresh: Promise<readonly Model<Api>[]> | undefined
 
   constructor(private readonly config: PiAiAdapterOptions) {
     super()
@@ -252,7 +256,17 @@ export class PiAiAdapter extends LlmAdapter {
     const profiles = this.config.profiles()
     if (this.snapshot?.profiles === profiles) return this.snapshot
     const models: MutableModels = createModels(this.config.auth)
-    for (const profile of profiles.values()) models.setProvider(profile.piProvider)
+    for (const profile of profiles.values()) {
+      const live = this.liveModels.get(profile.provider)
+      if (live === undefined) {
+        models.setProvider(profile.piProvider)
+        continue
+      }
+      models.setProvider({
+        ...profile.piProvider,
+        getModels: () => live.models,
+      })
+    }
     this.snapshot = { profiles, models }
     return this.snapshot
   }
@@ -288,16 +302,73 @@ export class PiAiAdapter extends LlmAdapter {
   }
 
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    return Promise.resolve().then(() => {
+    return (async () => {
       const snapshot = this.current()
-      this.profileOf(snapshot, provider)
-      return snapshot.models.getModels(provider).map(model => ({
+      const profile = this.profileOf(snapshot, provider)
+      const models = provider === 'atlas'
+        ? await this.refreshAtlasModels(profile)
+        : snapshot.models.getModels(provider)
+      return models.map(model => ({
         provider,
         id: model.id,
         name: model.name,
         inputModalities: [...model.input],
       }))
-    })
+    })()
+  }
+
+  /** Refresh Atlas's hot-swappable model directory and make its entries routable. */
+  private async refreshAtlasModels(profile: ResolvedPiAiProviderProfile): Promise<readonly Model<Api>[]> {
+    const cached = this.liveModels.get(profile.provider)
+    if (cached !== undefined && cached.expiresAt > Date.now()) return cached.models
+    if (profile.baseURL === undefined || profile.baseURL.length === 0) {
+      return this.current().models.getModels(profile.provider)
+    }
+    const baseURL = profile.baseURL
+    if (this.atlasRefresh !== undefined) return this.atlasRefresh
+    this.atlasRefresh = (async () => {
+      try {
+        const apiKey = await this.config.resolveApiKey(profile.provider, profile)
+        const discovered = await discoverModels({
+          provider: profile.provider,
+          baseURL,
+          ...profile.api === undefined ? {} : { api: profile.api },
+          ...apiKey === undefined ? {} : { apiKey },
+        })
+        const models = this.materializeLiveModels(profile, discovered)
+        if (models.length > 0) {
+          this.liveModels.set(profile.provider, { models, expiresAt: Date.now() + 15_000 })
+          this.snapshot = undefined
+          return models
+        }
+      } catch {
+        // Keep the last good directory or configured fallback available during
+        // a transient Atlas restart; the next refresh retries after the cache.
+      }
+      return cached?.models ?? this.current().models.getModels(profile.provider)
+    })()
+    try {
+      return await this.atlasRefresh
+    } finally {
+      this.atlasRefresh = undefined
+    }
+  }
+
+  /** Convert live listing metadata into pi-ai descriptors using the configured route as protocol template. */
+  private materializeLiveModels(
+    profile: ResolvedPiAiProviderProfile,
+    discovered: readonly LlmDiscoveredModel[],
+  ): readonly Model<Api>[] {
+    const configured = profile.piProvider.getModels()
+    const template = configured[0]
+    if (template === undefined) return []
+    return discovered.map(entry => ({
+      ...template,
+      id: entry.id,
+      name: entry.name ?? template.name ?? entry.id,
+      ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
+      ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),
+    }))
   }
 
   override resolveModel(

@@ -166,6 +166,30 @@ describe('PiAiAdapter provider routing', () => {
     })
   })
 
+  it('lists and routes the currently available Atlas local models', async () => {
+    const server = await mockServer([
+      { body: JSON.stringify({ data: [{ id: 'local-nemotron', name: 'Local Nemotron', context_window: 32768 }] }) },
+      { events: textEvents },
+    ])
+    const ctx = await harness(server.url, {
+      api: 'openai-completions',
+      models: [{ id: 'auto', name: 'Atlas auto', contextWindow: 131072 }],
+    }, 'atlas')
+
+    await expect(ctx.llm.listModels('atlas')).resolves.toEqual([{
+      provider: 'atlas',
+      id: 'local-nemotron',
+      name: 'Local Nemotron',
+      inputModalities: ['text'],
+    }])
+    await expect(assemble(ctx, {
+      provider: 'atlas',
+      model: 'local-nemotron',
+      messages: [],
+    })).resolves.toMatchObject({ message: { content: [{ type: 'text', text: 'hello' }] } })
+    expect(server.paths).toEqual(['/models', '/chat/completions'])
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {
