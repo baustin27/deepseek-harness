@@ -362,13 +362,24 @@ export class PiAiAdapter extends LlmAdapter {
     const configured = profile.piProvider.getModels()
     const template = configured[0]
     if (template === undefined) return []
-    return discovered.map(entry => ({
+    const liveModels = discovered.map(entry => ({
       ...template,
       id: entry.id,
       name: entry.name ?? template.name ?? entry.id,
       ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
       ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),
     }))
+    if (profile.provider !== 'atlas') return liveModels
+
+    // Atlas's live directory contains concrete lanes, while automatic combo
+    // routes are stable gateway aliases that are resolved by Atlas itself.
+    // Keep those configured aliases visible when a live refresh replaces the
+    // fallback catalog, so DSH exposes both the current lanes and the combos.
+    const liveIds = new Set(liveModels.map(model => model.id))
+    return [
+      ...liveModels,
+      ...configured.filter(model => (model.id === 'auto' || model.id === 'auto-free') && !liveIds.has(model.id)),
+    ]
   }
 
   override resolveModel(

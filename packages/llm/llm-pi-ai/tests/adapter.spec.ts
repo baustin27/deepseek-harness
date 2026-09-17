@@ -176,12 +176,20 @@ describe('PiAiAdapter provider routing', () => {
       models: [{ id: 'auto', name: 'Atlas auto', contextWindow: 131072 }],
     }, 'atlas')
 
-    await expect(ctx.llm.listModels('atlas')).resolves.toEqual([{
-      provider: 'atlas',
-      id: 'local-nemotron',
-      name: 'Local Nemotron',
-      inputModalities: ['text'],
-    }])
+    await expect(ctx.llm.listModels('atlas')).resolves.toEqual([
+      {
+        provider: 'atlas',
+        id: 'local-nemotron',
+        name: 'Local Nemotron',
+        inputModalities: ['text'],
+      },
+      {
+        provider: 'atlas',
+        id: 'auto',
+        name: 'Atlas auto',
+        inputModalities: ['text'],
+      },
+    ])
     await expect(assemble(ctx, {
       provider: 'atlas',
       model: 'local-nemotron',
