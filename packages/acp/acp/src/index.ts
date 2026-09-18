@@ -55,6 +55,8 @@ import { AcpMcpConfigError } from './mcp.ts'
 import { AcpModelConfigError } from './model-control.ts'
 import { AcpSession } from './session.ts'
 
+export { acpUpdateToAgentEvent } from './events.ts'
+
 const DEFAULT_SESSION_LIST_PAGE_SIZE = 100
 
 export const name = 'acp'
