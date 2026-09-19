@@ -213,6 +213,8 @@ function requestHeaders(
   headers: Readonly<Record<string, string>> | undefined,
   requestId: string,
   sessionId: string | undefined,
+  purpose: GenerateOptions['purpose'],
+  workspacePath: GenerateOptions['workspacePath'],
 ): Record<string, string> {
   const attribution = attributionHeaders()
   const reserved = new Set(Object.keys(attribution).map(name => name.toLowerCase()))
@@ -225,8 +227,14 @@ function requestHeaders(
     // The Atlas route is OpenCode-compatible. DSH owns the conversation
     // session, so carry that identity across the generic pi-ai boundary;
     // other providers must not receive OpenCode-specific headers.
-    ...provider === 'atlas' && sessionId !== undefined
+    ...(['atlas', 'atlas-sandbox'] as const).includes(provider as 'atlas' | 'atlas-sandbox') && sessionId !== undefined
       ? { 'x-opencode-session': sessionId }
+      : {},
+    ...(['atlas', 'atlas-sandbox'] as const).includes(provider as 'atlas' | 'atlas-sandbox') && purpose !== undefined
+      ? { 'x-dsh-request-purpose': purpose }
+      : {},
+    ...(['atlas', 'atlas-sandbox'] as const).includes(provider as 'atlas' | 'atlas-sandbox') && workspacePath !== undefined
+      ? { 'x-dsh-workspace-path': workspacePath }
       : {},
   }
 }
@@ -376,10 +384,16 @@ export class PiAiAdapter extends LlmAdapter {
     // Keep those configured aliases visible when a live refresh replaces the
     // fallback catalog, so DSH exposes both the current lanes and the combos.
     const liveIds = new Set(liveModels.map(model => model.id))
-    return [
-      ...liveModels,
-      ...configured.filter(model => (model.id === 'auto' || model.id === 'auto-free') && !liveIds.has(model.id)),
-    ]
+    // Atlas may expose only currently healthy local lanes from /v1/models
+    // while its managed sandbox lane remains routable by its stable model
+    // ids. Keep the explicitly configured free sandbox entries visible so a
+    // transient/partial edge catalog cannot make valid managed routes vanish
+    // from DSH's selector. Direct sandbox routes remain a separate provider.
+    const managedConfigured = configured.filter(model =>
+      (model.id === 'auto' || model.id === 'auto-free' || model.id.endsWith(':free'))
+      && !liveIds.has(model.id),
+    )
+    return [...liveModels, ...managedConfigured]
   }
 
   override resolveModel(
@@ -520,6 +534,8 @@ export class PiAiAdapter extends LlmAdapter {
           profile.headers,
           requestId,
           options.sessionId === undefined ? undefined : String(options.sessionId),
+          options.purpose,
+          options.workspacePath,
         ),
       })
       const iterator = toStreamChunks(events, model.contextWindow, options.signal)[Symbol.asyncIterator]()
