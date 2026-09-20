@@ -395,7 +395,10 @@ export class PiAiAdapter extends LlmAdapter {
       }
       return {
         ...base,
-        id: entry.id,
+        // Keep the configured route id when the endpoint uses the same model
+        // with or without Atlas's `:free` suffix. DSH's per-model stream and
+        // retry settings are keyed by that stable configured id.
+        id: configuredModel?.id ?? entry.id,
         name: configuredModel?.name ?? entry.name ?? base.name ?? entry.id,
         ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
         ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),

@@ -200,7 +200,7 @@ describe('PiAiAdapter provider routing', () => {
 
   it('preserves exact configured Atlas capabilities when the live row omits them', async () => {
     const server = await mockServer([
-      { body: JSON.stringify({ data: [{ id: 'muse-spark-1.3-contributor-free:free' }] }) },
+      { body: JSON.stringify({ data: [{ id: 'muse-spark-1.3-contributor-free' }] }) },
     ])
     const ctx = await harness(server.url, {
       api: 'openai-completions',
