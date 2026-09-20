@@ -66,6 +66,11 @@ import { discoverModels } from './discovery.ts'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 import { toStreamChunks } from './stream.ts'
 
+/** Match an Atlas live id with its configured base id across the `:free` suffix. */
+function atlasLookupModelId(id: string): string {
+  return id.endsWith(':free') ? id.slice(0, -5) : id
+}
+
 /** One resolution's frozen view: the profiles and the collection built from them. */
 interface PiAiSnapshot {
   /** The resolved profiles this collection was built from, used as its identity. */
@@ -370,13 +375,33 @@ export class PiAiAdapter extends LlmAdapter {
     const configured = profile.piProvider.getModels()
     const template = configured[0]
     if (template === undefined) return []
-    const liveModels = discovered.map(entry => ({
-      ...template,
-      id: entry.id,
-      name: entry.name ?? template.name ?? entry.id,
-      ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
-      ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),
-    }))
+
+    // A live endpoint commonly reports only ids. Match each row to its exact
+    // configured model first, then to the same id without Atlas's `:free`
+    // display suffix. This keeps operator-declared capacities (notably Muse's
+    // 1M context) when the endpoint omits them, while live metadata wins when
+    // it is present. Unknown rows use the route defaults rather than borrowing
+    // the first configured model's capacity.
+    const configuredById = new Map(configured.map(model => [model.id, model]))
+    const configuredByLookupId = new Map(configured.map(model => [atlasLookupModelId(model.id), model]))
+    const liveModels = discovered.map((entry) => {
+      const configuredModel = configuredById.get(entry.id)
+        ?? configuredByLookupId.get(atlasLookupModelId(entry.id))
+      const base = configuredModel ?? {
+        ...template,
+        contextWindow: profile.defaultContextWindow ?? template.contextWindow,
+        maxTokens: profile.defaultMaxTokens ?? template.maxTokens,
+        input: [...profile.defaultInput ?? template.input],
+      }
+      return {
+        ...base,
+        id: entry.id,
+        name: configuredModel?.name ?? entry.name ?? base.name ?? entry.id,
+        ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
+        ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),
+        ...(entry.inputModalities === undefined ? {} : { input: [...entry.inputModalities] }),
+      }
+    })
     if (profile.provider !== 'atlas') return liveModels
 
     // Atlas's live directory contains concrete lanes, while automatic combo
@@ -384,6 +409,7 @@ export class PiAiAdapter extends LlmAdapter {
     // Keep those configured aliases visible when a live refresh replaces the
     // fallback catalog, so DSH exposes both the current lanes and the combos.
     const liveIds = new Set(liveModels.map(model => model.id))
+    const liveLookupIds = new Set(liveModels.map(model => atlasLookupModelId(model.id)))
     // Atlas may expose only currently healthy local lanes from /v1/models
     // while its managed sandbox lane remains routable by its stable model
     // ids. Keep the explicitly configured free sandbox entries visible so a
@@ -391,7 +417,8 @@ export class PiAiAdapter extends LlmAdapter {
     // from DSH's selector. Direct sandbox routes remain a separate provider.
     const managedConfigured = configured.filter(model =>
       (model.id === 'auto' || model.id === 'auto-free' || model.id.endsWith(':free'))
-      && !liveIds.has(model.id),
+      && !liveIds.has(model.id)
+      && !liveLookupIds.has(atlasLookupModelId(model.id)),
     )
     return [...liveModels, ...managedConfigured]
   }

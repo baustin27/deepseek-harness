@@ -96,7 +96,6 @@ const normalPolicySchema: z<NormalRetryPolicyConfig> = z.object({
 
 const alwaysPolicySchema: z<AlwaysRetryPolicyConfig> = z.object({
   mode: z.const('always').required(),
-  retryableCodes: z.array(z.string()),
   backoff: backoffSchema,
 })
 

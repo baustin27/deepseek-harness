@@ -23,7 +23,7 @@
  */
 
 import { INVALID_CREDENTIAL_CODE, LlmError, normalizeApiKey } from '@deepseek-ai/dsh-llm'
-import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
+import type { LlmDiscoveredModel, LlmModelDiscoveryOperation, ModelModality } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
 import { catalogModels } from './catalog.ts'
 
@@ -91,8 +91,22 @@ interface ListingEntry {
   max_tokens?: unknown
   max_output_tokens?: unknown
   maxTokens?: unknown
+  inputModalities?: unknown
+  input_modalities?: unknown
   limit?: ListingLimit | null
   top_provider?: ListingTopProvider | null
+}
+
+/** Accepted model-input labels from enriched OpenAI-compatible listings. */
+const MODEL_MODALITIES: ReadonlySet<ModelModality> = new Set(['text', 'image'])
+
+/** Preserve only modalities the Harness model contract understands. */
+function modalities(value: unknown): ModelModality[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const result = value.filter((candidate): candidate is ModelModality =>
+    typeof candidate === 'string' && MODEL_MODALITIES.has(candidate as ModelModality),
+  )
+  return result.length > 0 ? [...new Set(result)] : undefined
 }
 
 /** A positive integer field of a listing entry, or `undefined` when absent or unusable. */
@@ -227,11 +241,13 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
       entry?.limit?.output,
       entry?.top_provider?.max_completion_tokens,
     )
+    const inputModalities = modalities(entry?.inputModalities ?? entry?.input_modalities)
     models.push({
       id,
       name,
       ...contextWindow === undefined ? {} : { contextWindow },
       ...maxTokens === undefined ? {} : { maxTokens },
+      ...inputModalities === undefined ? {} : { inputModalities },
     })
   }
   return models

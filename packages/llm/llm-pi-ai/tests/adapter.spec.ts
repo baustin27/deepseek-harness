@@ -198,6 +198,58 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/models', '/chat/completions'])
   })
 
+  it('preserves exact configured Atlas capabilities when the live row omits them', async () => {
+    const server = await mockServer([
+      { body: JSON.stringify({ data: [{ id: 'muse-spark-1.3-contributor-free:free' }] }) },
+    ])
+    const ctx = await harness(server.url, {
+      api: 'openai-completions',
+      models: [
+        { id: 'auto-free', name: 'Atlas auto free', contextWindow: 32_768 },
+        { id: 'muse-spark-1.3-contributor-free:free', name: 'Muse Spark 1.3', contextWindow: 1_048_576, input: ['text', 'image'] },
+      ],
+    }, 'atlas')
+
+    await expect(ctx.llm.resolveModelInfo('atlas', 'muse-spark-1.3-contributor-free:free')).resolves.toMatchObject({
+      context: { contextWindow: 1_048_576 },
+      inputModalities: ['text', 'image'],
+    })
+    await expect(ctx.llm.listModels('atlas')).resolves.toEqual([
+      {
+        provider: 'atlas',
+        id: 'muse-spark-1.3-contributor-free:free',
+        name: 'Muse Spark 1.3',
+        inputModalities: ['text', 'image'],
+      },
+      {
+        provider: 'atlas',
+        id: 'auto-free',
+        name: 'Atlas auto free',
+        inputModalities: ['text'],
+      },
+    ])
+  })
+
+  it('uses route defaults for an unknown live Atlas model instead of the first model capacity', async () => {
+    const server = await mockServer([
+      { body: JSON.stringify({ data: [{ id: 'new-live-model' }] }) },
+    ])
+    const ctx = await harness(server.url, {
+      api: 'openai-completions',
+      defaultContextWindow: 262_144,
+      defaultMaxTokens: 16_384,
+      models: [{ id: 'auto-free', name: 'Atlas auto free', contextWindow: 32_768 }],
+    }, 'atlas')
+
+    await expect(ctx.llm.listModels('atlas')).resolves.toEqual([
+      { provider: 'atlas', id: 'new-live-model', name: 'new-live-model', inputModalities: ['text'] },
+      { provider: 'atlas', id: 'auto-free', name: 'Atlas auto free', inputModalities: ['text'] },
+    ])
+    await expect(ctx.llm.resolveModelInfo('atlas', 'new-live-model')).resolves.toMatchObject({
+      context: { contextWindow: 262_144 },
+    })
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {

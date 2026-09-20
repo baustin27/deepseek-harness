@@ -154,6 +154,19 @@ describe('draft-provider model discovery', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('reads advertised input modalities from an OpenAI-compatible listing', async () => {
+    const server = await listingServer({
+      body: JSON.stringify({
+        data: [{ id: 'vision-model', input_modalities: ['text', 'image', 'audio'] }],
+      }),
+    })
+    const ctx = await harness()
+
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url, apiKey: 'probe-key' })).resolves.toEqual([
+      { id: 'vision-model', name: 'vision-model', inputModalities: ['text', 'image'] },
+    ])
+  })
+
   it('reads an enriched models map using route ids and nested capacities', async () => {
     const server = await listingServer({
       body: JSON.stringify({
