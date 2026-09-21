@@ -205,16 +205,19 @@
     - id: subprocess
       name: '@deepseek-ai/dsh-subprocess-local'
 
-    # Every shipped CLI mode starts with the same file-effect boundary.
-    # The environment remains an explicit deployment override; otherwise fresh
-    # sessions pin workspace-write + ask through the permission service below.
+    # Every shipped CLI mode starts with direct developer host access. The
+    # sandbox runner remains mounted for explicit read-only/workspace-write/
+    # danger-full-access opt-down profiles; the policy selects it per session.
     - id: sandbox
       name: '@deepseek-ai/dsh-sandbox-local'
 
     - id: sandbox-policy
       name: '@deepseek-ai/dsh-sandbox-policy'
       config:
-        mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+        # DSH_PERMISSION_MODE is the legacy explicit sandbox opt-down. A new
+        # execution-profile env override is also accepted; unset means host.
+        executionProfile: !!js process.env.DSH_EXECUTION_PROFILE ?? 'developer-host-access'
+        mode: !!js process.env.DSH_PERMISSION_MODE
         workspaceRoot: !!js process.cwd()
 
     - id: bash-sandbox
@@ -230,19 +233,28 @@
     - id: approval
       name: '@deepseek-ai/dsh-user-approval'
       config:
-        policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+        # Host access and danger-full-access are explicit no-prompt profiles;
+        # every confined opt-down retains ask-by-default behavior.
+        policy: !!js "['developer-host-access', 'danger-full-access'].includes(process.env.DSH_PERMISSION_MODE ?? process.env.DSH_EXECUTION_PROFILE ?? 'developer-host-access') ? 'never' : 'ask'"
 
     - id: permission
       name: '@deepseek-ai/dsh-permission-presets'
       config:
         presets:
+          developer-host-access:
+            executionProfile: developer-host-access
+            approval: never
+            description: Direct host-process access in the current OS account and container; host filesystem, network, and process visibility; immutable non-mounted attachments.
           read-only:
+            executionProfile: read-only
             sandbox: read-only
             approval: ask
           workspace-write:
+            executionProfile: workspace-write
             sandbox: workspace-write
             approval: ask
           danger-full-access:
+            executionProfile: danger-full-access
             sandbox: danger-full-access
             approval: never
 
