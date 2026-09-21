@@ -380,7 +380,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         type: 'text',
         text: value.kind === 'background'
           ? `started background job ${value.jobId}`
-          : renderPwshResult(value as RenderablePwshResult, escalationModes),
+          : renderPwshResult(value as unknown as RenderablePwshResult, escalationModes),
       }],
     },
     /* jscpd:ignore-start -- the execute path mirrors dsh-tool-bash's by design (see the pwsh-tool-and-executor Agent Note). */

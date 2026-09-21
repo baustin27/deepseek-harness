@@ -49,6 +49,10 @@ export function renderResult(
       markers.push(escalationHintMarker('command'))
     }
   }
+  if (result.hostAccess !== undefined) {
+    const caps = result.hostAccess.capabilities
+    markers.push(`[developer-host-access: backend=${caps.backend}; cwd=${caps.cwd}; roots=${caps.roots.join(',')}; network=${caps.network}; process=${caps.processVisibility}; attachments=immutable,never-mounted]`)
+  }
   // A command may trap SIGTERM and exit 0 after timeout; still report interruption.
   if (result.timedOut) markers.push(`[timed out after ${result.timeoutMs}ms]`)
   if (result.signal !== null) {

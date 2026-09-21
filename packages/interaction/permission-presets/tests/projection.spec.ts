@@ -20,11 +20,20 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import PermissionPresetService from '@deepseek-ai/dsh-permission-presets'
 import type { Config } from '@deepseek-ai/dsh-permission-presets'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
+import { SandboxProvider } from '@deepseek-ai/dsh-sandbox'
+import type { ConfinedArgv, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
+
+class TestSandboxProvider extends SandboxProvider {
+  confine(argv: readonly string[], _policy: SandboxPolicy): ConfinedArgv {
+    return { argv: [...argv], enforcement: 'full', denialSignatures: [], runnerFailureRules: [] }
+  }
+}
 
 async function harness(options: { withPermission?: boolean; config?: Config } = {}): Promise<{ ctx: Context; session: Session }> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
+  await ctx.plugin(TestSandboxProvider)
   await ctx.plugin(CommandRuntime)
   ctx.provide('shell', {
     sandboxMode: 'workspace-write',
@@ -50,7 +59,9 @@ describe('permissions projection unit', () => {
     const { ctx, session } = await harness()
     const value = ctx.sessionProjections.snapshot(session).values.permissions
     expect(value).toMatchObject({ currentValue: 'workspace-write' })
-    expect(value?.options.map(option => option.value)).toEqual(['workspace-write', 'danger-full-access'])
+    expect(value?.options.map(option => option.value)).toEqual([
+      'developer-host-access', 'read-only', 'workspace-write', 'danger-full-access',
+    ])
   })
 
   it('folds the knob events and notifies the change feed per knob append', async () => {
@@ -61,10 +72,10 @@ describe('permissions projection unit', () => {
     })
     ctx.permissionPresets.set(session, 'danger-full-access')
     const permissionChanges = changes.filter(change => change.key === 'permissions')
-    expect(permissionChanges).toHaveLength(3)
+    expect(permissionChanges).toHaveLength(4)
     expect(permissionChanges.at(-1)).toMatchObject({ key: 'permissions', value: { currentValue: 'danger-full-access' } })
     session.append('turn/start', { turn: 1 })
-    expect(changes).toHaveLength(3)
+    expect(changes).toHaveLength(4)
   })
 
   it('appends custom as a current-only option when the knobs match no preset', async () => {
@@ -109,7 +120,7 @@ describe('/permission command', () => {
     const execution = await ctx.commands.execute(agent, '/permission', [], new AbortController().signal)
     expect(execution?.result).toEqual({
       kind: 'success',
-      text: 'current preset workspace-write (available: workspace-write, danger-full-access)',
+      text: 'current preset workspace-write (available: developer-host-access, read-only, workspace-write, danger-full-access)',
     })
     expect(session.snapshotEvents().filter(event => event.type === 'permission/preset')).toHaveLength(1)
   })
@@ -125,7 +136,7 @@ describe('/permission command', () => {
     // preset`, which the row's own title already says.
     expect(execution?.result).toEqual({
       kind: 'error',
-      text: 'unknown preset "yolo" (available: workspace-write, danger-full-access)',
+      text: 'unknown preset "yolo" (available: developer-host-access, read-only, workspace-write, danger-full-access)',
     })
     expect(session.snapshotEvents().filter(event =>
       event.type !== 'command/run' && event.type !== 'command/done')).toEqual(before)

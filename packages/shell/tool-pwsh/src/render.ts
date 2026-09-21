@@ -31,6 +31,7 @@ export interface RenderablePwshResult {
   stdout: CollectedOutput
   stderr: CollectedOutput
   sandbox?: ShellSandboxInfo
+  hostAccess?: ShellHostAccessInfo
 }
 
 /**
@@ -66,6 +67,10 @@ export function renderPwshResult(
     if (escalationModes.length > 0) {
       markers.push(escalationHintMarker('command'))
     }
+  }
+  if (result.hostAccess !== undefined) {
+    const caps = result.hostAccess.capabilities
+    markers.push(`[developer-host-access: backend=${caps.backend}; cwd=${caps.cwd}; roots=${caps.roots.join(',')}; network=${caps.network}; process=${caps.processVisibility}; attachments=immutable,never-mounted]`)
   }
   // A command may trap the termination and exit 0 after timeout; still report interruption.
   if (result.timedOut) markers.push(`[timed out after ${result.timeoutMs}ms]`)
