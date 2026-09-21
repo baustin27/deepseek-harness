@@ -30,6 +30,7 @@ const SELECT: PermissionSelect = {
     { value: 'read-only', name: 'read-only', description: 'Reads only.' },
     { value: 'workspace-write', name: 'workspace-write' },
     { value: 'danger-full-access', name: 'danger-full-access' },
+    { value: 'developer-host-access', name: 'developer-host-access' },
   ],
   currentValue: 'workspace-write',
 }
@@ -111,30 +112,44 @@ describe('ui-permission browser plugin', () => {
     b.values.set(sid('s1'), { ...SELECT, options: [...SELECT.options, { value: 'custom', name: 'Custom' }], currentValue: 'custom' })
     expect(c.available(proj)).toBe(true)
     const options = await c.ui.options(proj, new AbortController().signal)
-    expect(options.map(option => option.id)).toEqual(['read-only', 'workspace-write', 'danger-full-access'])
+    expect(options.map(option => option.id)).toEqual(['read-only', 'workspace-write', 'danger-full-access', 'developer-host-access'])
     expect(options.every(option => option.active !== true)).toBe(true)
     b.values.set(sid('s1'), SELECT)
     const again = await c.ui.options(proj, new AbortController().signal)
     expect(again.find(option => option.id === 'workspace-write')?.active).toBe(true)
     expect(again.find(option => option.id === 'read-only')?.detail).toBe('Reads only.')
     // English built-ins use product labels; other kebab-case names title-case.
-    expect(again.map(option => option.label)).toEqual(['Read Only', 'Workspace Write', 'Full access'])
+    expect(again.map(option => option.label)).toEqual(['Read Only', 'Workspace Write', 'Sandbox Full access', 'Developer host access'])
     expect(again.find(option => option.id === 'danger-full-access')?.confirmation).toEqual({
-      title: 'Enable Full access?',
+      title: 'Enable Sandbox Full access?',
       description: accessEn['confirm.description'],
       acknowledgeLabel: 'I understand the risks and want to continue',
       cancelLabel: 'Cancel',
-      confirmLabel: 'Enable Full access',
+      confirmLabel: 'Enable Sandbox Full access',
+    })
+    expect(again.find(option => option.id === 'developer-host-access')?.confirmation).toEqual({
+      title: 'Enable Developer host access?',
+      description: accessEn['confirm.host.description'],
+      acknowledgeLabel: 'I understand the risks and want to continue',
+      cancelLabel: 'Cancel',
+      confirmLabel: 'Enable Developer host access',
     })
     b.locale.setLocale('zh')
     const localized = await c.ui.options(proj, new AbortController().signal)
-    expect(localized.map(option => option.label)).toEqual(['仅可查看', '工作区内修改', '完全权限'])
+    expect(localized.map(option => option.label)).toEqual(['仅可查看', '工作区内修改', '沙箱完全访问', '开发者主机访问'])
     expect(localized.find(option => option.id === 'danger-full-access')?.confirmation).toEqual({
-      title: '确认启用完全权限？',
+      title: '确认启用沙箱完全访问？',
       description: accessZh['confirm.description'],
       acknowledgeLabel: '我已了解风险，并愿意继续',
       cancelLabel: '取消',
-      confirmLabel: '启用完全权限',
+      confirmLabel: '启用沙箱完全访问',
+    })
+    expect(localized.find(option => option.id === 'developer-host-access')?.confirmation).toEqual({
+      title: '确认启用开发者主机访问？',
+      description: accessZh['confirm.host.description'],
+      acknowledgeLabel: '我已了解风险，并愿意继续',
+      cancelLabel: '取消',
+      confirmLabel: '启用开发者主机访问',
     })
     b.values.set(sid('s1'), { ...SELECT, options: [
       { value: 'workspace-write', name: 'Project Files' },

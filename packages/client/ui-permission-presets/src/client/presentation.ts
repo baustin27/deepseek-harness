@@ -1,6 +1,9 @@
 import { en } from './locales.ts'
 
-/** Machine value of the preset that requires an explicit GUI risk gate. */
+/** Machine value of the preset that runs directly in the current host account/container. */
+export const DEVELOPER_HOST_ACCESS_PRESET = 'developer-host-access'
+
+/** Machine value of the legacy unrestricted sandbox opt-down. */
 export const FULL_ACCESS_PRESET = 'danger-full-access'
 
 /** Locale dictionary key for a built-in permission preset label. */
@@ -8,17 +11,20 @@ export type PermissionPresetLabelKey =
   | 'preset.readOnly'
   | 'preset.workspaceWrite'
   | 'preset.fullAccess'
+  | 'preset.developerHostAccess'
 
 const PRESET_LABEL_KEYS = new Map<string, PermissionPresetLabelKey>([
   ['read-only', 'preset.readOnly'],
   ['workspace-write', 'preset.workspaceWrite'],
   [FULL_ACCESS_PRESET, 'preset.fullAccess'],
+  [DEVELOPER_HOST_ACCESS_PRESET, 'preset.developerHostAccess'],
 ])
 
 const DEFAULT_PRESET_LABELS: Record<PermissionPresetLabelKey, string> = {
   'preset.readOnly': en['preset.readOnly'],
   'preset.workspaceWrite': en['preset.workspaceWrite'],
   'preset.fullAccess': en['preset.fullAccess'],
+  'preset.developerHostAccess': en['preset.developerHostAccess'],
 }
 
 /**

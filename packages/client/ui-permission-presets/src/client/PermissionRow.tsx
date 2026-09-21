@@ -12,7 +12,9 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PermissionSettingsState } from './settings-store.ts'
 import type { PermissionSettingsKey } from './locales.ts'
-import { displayPermissionPreset, FULL_ACCESS_PRESET } from './presentation.ts'
+import {
+  DEVELOPER_HOST_ACCESS_PRESET, displayPermissionPreset, FULL_ACCESS_PRESET,
+} from './presentation.ts'
 import css from './PermissionRow.module.css'
 
 /** Registration-side business face for the host-backed preference. */
@@ -41,7 +43,7 @@ export type PermissionRowProps =
 export function PermissionRow({ load, select, usePermission, t }: PermissionRowProps) {
   const state = usePermission(snapshot => snapshot)
   const [open, setOpen] = useState(false)
-  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
+  const [confirmingPreset, setConfirmingPreset] = useState<string | undefined>()
   const [acknowledged, setAcknowledged] = useState(false)
 
   useEffect(() => {
@@ -52,12 +54,12 @@ export function PermissionRow({ load, select, usePermission, t }: PermissionRowP
     if (state.writable && state.status !== 'unavailable') return
     setOpen(false)
     setAcknowledged(false)
-    setConfirmingFullAccess(false)
+    setConfirmingPreset(undefined)
   }, [state.status, state.writable])
 
   if (state.status === 'unavailable') return null
   const selected = state.options.find(option => option.id === state.currentValue)
-  const busy = state.status === 'loading' || state.status === 'saving' || confirmingFullAccess
+  const busy = state.status === 'loading' || state.status === 'saving' || confirmingPreset !== undefined
   const optionLabel = (option: PermissionSettingsState['options'][number]): string =>
     displayPermissionPreset(option.id, option.label, t)
   const label = selected !== undefined ? optionLabel(selected) : (busy ? t('loading') : t('unavailable'))
@@ -78,9 +80,9 @@ export function PermissionRow({ load, select, usePermission, t }: PermissionRowP
           onSelect={(id) => {
             setOpen(false)
             if (id === state.currentValue) return
-            if (id === FULL_ACCESS_PRESET) {
+            if ([FULL_ACCESS_PRESET, DEVELOPER_HOST_ACCESS_PRESET].includes(id)) {
               setAcknowledged(false)
-              setConfirmingFullAccess(true)
+              setConfirmingPreset(id)
               return
             }
             void select(id)
@@ -103,24 +105,25 @@ export function PermissionRow({ load, select, usePermission, t }: PermissionRowP
         />
       </div>
       <RiskConfirmation
-        open={confirmingFullAccess}
-        title={t('confirm.title')}
-        description={t('confirm.description')}
+        open={confirmingPreset !== undefined}
+        title={t(confirmingPreset === DEVELOPER_HOST_ACCESS_PRESET ? 'confirm.host.title' : 'confirm.title')}
+        description={t(confirmingPreset === DEVELOPER_HOST_ACCESS_PRESET ? 'confirm.host.description' : 'confirm.description')}
         acknowledgeLabel={t('confirm.acknowledge')}
         cancelLabel={t('confirm.cancel')}
         closeLabel={t('close')}
-        confirmLabel={t('confirm.enable')}
+        confirmLabel={t(confirmingPreset === DEVELOPER_HOST_ACCESS_PRESET ? 'confirm.host.enable' : 'confirm.enable')}
         acknowledged={acknowledged}
         disabled={!state.writable || state.status === 'saving'}
         onAcknowledgedChange={setAcknowledged}
         onCancel={() => {
           setAcknowledged(false)
-          setConfirmingFullAccess(false)
+          setConfirmingPreset(undefined)
         }}
         onConfirm={() => {
           setAcknowledged(false)
-          setConfirmingFullAccess(false)
-          void select(FULL_ACCESS_PRESET)
+          const preset = confirmingPreset
+          setConfirmingPreset(undefined)
+          if (preset !== undefined) void select(preset)
         }}
       />
     </>

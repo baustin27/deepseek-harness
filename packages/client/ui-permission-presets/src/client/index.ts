@@ -33,7 +33,7 @@ import {
   accessEn, accessZh, en, zh,
 } from './locales.ts'
 import {
-  displayPermissionPreset, FULL_ACCESS_PRESET,
+  DEVELOPER_HOST_ACCESS_PRESET, displayPermissionPreset, FULL_ACCESS_PRESET,
 } from './presentation.ts'
 import { PermissionPresetSettingsController } from './settings-store.ts'
 
@@ -64,14 +64,14 @@ function optionsOf(value: PermissionSelect, t: (key: string) => string): SelectO
       label: displayPermissionPreset(option.value, option.name, t),
       ...(option.description !== undefined ? { detail: option.description } : {}),
       ...(option.value === value.currentValue ? { active: true } : {}),
-      ...(option.value === FULL_ACCESS_PRESET
+      ...([FULL_ACCESS_PRESET, DEVELOPER_HOST_ACCESS_PRESET].includes(option.value)
         ? {
           confirmation: {
-            title: t('confirm.title'),
-            description: t('confirm.description'),
+            title: t(option.value === DEVELOPER_HOST_ACCESS_PRESET ? 'confirm.host.title' : 'confirm.title'),
+            description: t(option.value === DEVELOPER_HOST_ACCESS_PRESET ? 'confirm.host.description' : 'confirm.description'),
             acknowledgeLabel: t('confirm.acknowledge'),
             cancelLabel: t('confirm.cancel'),
-            confirmLabel: t('confirm.enable'),
+            confirmLabel: t(option.value === DEVELOPER_HOST_ACCESS_PRESET ? 'confirm.host.enable' : 'confirm.enable'),
           },
         }
         : {}),
@@ -95,25 +95,33 @@ export function apply(ctx: ClientContext): void {
         'preset.readOnly': accessZh['preset.readOnly'],
         'preset.workspaceWrite': accessZh['preset.workspaceWrite'],
         'preset.fullAccess': accessZh['preset.fullAccess'],
+        'preset.developerHostAccess': accessZh['preset.developerHostAccess'],
         'confirm.title': accessZh['confirm.title'],
         'confirm.description': accessZh['confirm.description'],
+        'confirm.host.title': accessZh['confirm.host.title'],
+        'confirm.host.description': accessZh['confirm.host.description'],
         'confirm.acknowledge': accessZh['confirm.acknowledge'],
         'confirm.cancel': accessZh['confirm.cancel'],
         'confirm.enable': accessZh['confirm.enable'],
+        'confirm.host.enable': accessZh['confirm.host.enable'],
       }),
       ctx.locale.register(ACCESS_NS, 'en', {
         'preset.readOnly': accessEn['preset.readOnly'],
         'preset.workspaceWrite': accessEn['preset.workspaceWrite'],
         'preset.fullAccess': accessEn['preset.fullAccess'],
+        'preset.developerHostAccess': accessEn['preset.developerHostAccess'],
         'confirm.title': accessEn['confirm.title'],
         'confirm.description': accessEn['confirm.description'],
+        'confirm.host.title': accessEn['confirm.host.title'],
+        'confirm.host.description': accessEn['confirm.host.description'],
         'confirm.acknowledge': accessEn['confirm.acknowledge'],
         'confirm.cancel': accessEn['confirm.cancel'],
         'confirm.enable': accessEn['confirm.enable'],
+        'confirm.host.enable': accessEn['confirm.host.enable'],
       }),
     ]
     return () => { for (const dispose of disposers) dispose() }
-  }, 'ui-permission: Full access confirmation dictionaries')
+  }, 'ui-permission: execution profile confirmation dictionaries')
   /* jscpd:ignore-end */
   const t = ctx.locale.bind(ACCESS_NS)
   const sessionFor = (session: ClientSessionContext): SessionFace | undefined =>
