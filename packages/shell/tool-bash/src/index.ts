@@ -71,6 +71,7 @@ function bashDescription(backgroundEnabled: boolean, escalationModes: readonly S
     ? 'Set `run_in_background: true` for long-running commands: the call returns a job id immediately; read its output with `job_output` and stop it with `job_kill`.'
     : 'Background execution is not available; long-running commands must finish within the timeout.'
   const base = 'Execute a bash command (`bash -c`) and return its stdout/stderr. '
+    + 'Every call MUST include both required arguments: `command` and `description`; never omit `description`. '
     + 'Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls — '
     + 'pass `workdir` instead of using `cd`. Non-zero exits are reported as `[exit code: N]`. '
     + `Current harness environment facts are exposed through managed \`$${DSH_ENV_PREFIX}*\` variables; inspect them when needed. `

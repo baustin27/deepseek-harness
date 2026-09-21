@@ -1131,10 +1131,12 @@ describe('the model-facing bash tool builds its request from named args only (no
     return { ctx, bash: ctx.shell as RecordingBashExecutor }
   }
 
-  it('describes the managed harness environment namespace to the model', async () => {
+  it('describes the managed harness environment namespace and required arguments to the model', async () => {
     const { ctx } = await setupRecording()
     const description = ctx.tools.get('bash')?.description ?? ''
     expect(description).toContain('$DSH_*')
+    expect(description).toContain('MUST include both required arguments')
+    expect(description).toContain('never omit `description`')
   })
 
   it('injects built-ins and the stable session id into a foreground request', async () => {
