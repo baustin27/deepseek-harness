@@ -12,6 +12,7 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import * as ToolTasks from '@deepseek-ai/dsh-tool-jobs'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
@@ -105,6 +106,10 @@ async function callUntilText(
   throw new Error(`${name} output did not include ${JSON.stringify(expected)}; last text was ${JSON.stringify(last !== undefined ? text(last) : '')}`)
 }
 
+function confinedMode(policy: ShellExecSpec['sandboxPolicy']): SandboxMode | undefined {
+  return policy !== undefined && 'mode' in policy ? policy.mode : undefined
+}
+
 class RecordingSandboxExecutor extends ShellExecutor {
   readonly modes: Array<string | undefined> = []
 
@@ -124,7 +129,7 @@ class RecordingSandboxExecutor extends ShellExecutor {
   }
 
   run(spec: ShellExecSpec): Promise<ShellRunResult> {
-    this.modes.push(spec.sandboxPolicy?.mode)
+    this.modes.push(confinedMode(spec.sandboxPolicy))
     return Promise.resolve({
       exitCode: 0,
       signal: null,
@@ -134,7 +139,7 @@ class RecordingSandboxExecutor extends ShellExecutor {
       stdout: { text: 'ok', truncated: false },
       stderr: { text: '', truncated: false },
       sandbox: {
-        mode: spec.sandboxPolicy?.mode ?? 'read-only',
+        mode: confinedMode(spec.sandboxPolicy) ?? 'read-only',
         denied: false,
         ...spec.command === 'without optional sandbox facts'
           ? {}
@@ -144,13 +149,13 @@ class RecordingSandboxExecutor extends ShellExecutor {
   }
 
   start(spec: ShellExecSpec): ShellProcess {
-    this.modes.push(spec.sandboxPolicy?.mode)
+    this.modes.push(confinedMode(spec.sandboxPolicy))
     return {
       status: 'completed',
       exitCode: 0,
       signal: null,
       done: Promise.resolve(),
-      sandbox: { mode: spec.sandboxPolicy?.mode ?? 'read-only', denied: false },
+      sandbox: { mode: confinedMode(spec.sandboxPolicy) ?? 'read-only', denied: false },
       readOutput: () => ({ delta: '', lossy: false }),
       kill: () => false,
     }

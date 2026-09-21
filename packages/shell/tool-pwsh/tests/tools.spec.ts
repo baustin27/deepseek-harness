@@ -27,6 +27,7 @@ import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
+import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
 import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
@@ -169,6 +170,10 @@ async function setupWithTasks(toolConfig: Partial<ToolPwsh.Config> = {}, dshHome
  * Records each confined mode and returns scriptable sandbox facts so the
  * escalation and rendering surfaces are testable without a real backend.
  */
+function confinedMode(policy: ShellExecSpec['sandboxPolicy']): SandboxMode | undefined {
+  return policy !== undefined && 'mode' in policy ? policy.mode : undefined
+}
+
 class ConfiningFakeBash extends ShellExecutor {
   requests: ShellExecRequest[] = []
   modes: Array<string | undefined> = []
@@ -191,10 +196,10 @@ class ConfiningFakeBash extends ShellExecutor {
   }
 
   override async run(spec: ShellExecSpec): Promise<ShellRunResult> {
-    this.modes.push(spec.sandboxPolicy?.mode)
+    this.modes.push(confinedMode(spec.sandboxPolicy))
     return runResult('ok\n', {
       sandbox: {
-        mode: spec.sandboxPolicy?.mode ?? 'read-only',
+        mode: confinedMode(spec.sandboxPolicy) ?? 'read-only',
         denied: false,
         ...spec.command === 'without optional sandbox facts'
           ? {}
@@ -204,7 +209,7 @@ class ConfiningFakeBash extends ShellExecutor {
   }
 
   override start(spec: ShellExecSpec): ShellProcess {
-    this.modes.push(spec.sandboxPolicy?.mode)
+    this.modes.push(confinedMode(spec.sandboxPolicy))
     return fakeProcess()
   }
 }

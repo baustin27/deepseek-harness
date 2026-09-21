@@ -212,7 +212,7 @@ export class PermissionPresetService extends Service {
         executionProfile: 'danger-full-access', sandbox: 'danger-full-access', approval: 'never',
         name: 'danger-full-access', description: 'Full file access without sandbox confinement or approval prompts.',
       },
-    }),
+    } as never),
     defaultPreset: z.string(),
   }) as unknown as z<Config>
 
@@ -234,8 +234,8 @@ export class PermissionPresetService extends Service {
       throw new Error(`permission: "${CUSTOM_PRESET}" is reserved for the derived not-a-preset state and cannot name a table entry`)
     }
     const hasSandboxOptDown = Object.values(this.presets).some(spec => spec.executionProfile !== DEVELOPER_HOST_ACCESS_PROFILE)
-    if (hasSandboxOptDown && ctx.shell.sandboxMode === undefined) {
-      throw new Error('permission: the mounted bash executor does not expose sandboxMode required by a sandbox opt-down preset')
+    if (hasSandboxOptDown && ctx.get('sandbox') === undefined) {
+      throw new Error('permission: the execution world does not expose a sandbox provider required by a sandbox opt-down preset')
     }
     for (const [name, spec] of Object.entries(this.presets)) {
       if (spec.executionProfile === DEVELOPER_HOST_ACCESS_PROFILE && spec.sandbox !== undefined) {
@@ -501,8 +501,9 @@ export class PermissionPresetService extends Service {
     if (state.executionProfile === null && effective !== CUSTOM_PRESET) {
       setExecutionProfile(session, this.resolve(effective).executionProfile)
     }
-    if (sandbox === null && this.executionProfileOf(state) !== DEVELOPER_HOST_ACCESS_PROFILE) {
-      setSandboxMode(session, this.ctx.shell.sandboxMode as SandboxMode)
+    const effectiveProfile = this.executionProfileOf(state)
+    if (sandbox === null && effectiveProfile !== DEVELOPER_HOST_ACCESS_PROFILE) {
+      setSandboxMode(session, effectiveProfile)
     }
     if (approval === null) {
       setApprovalPolicy(session, this.ctx.approval.config.policy ?? 'ask')

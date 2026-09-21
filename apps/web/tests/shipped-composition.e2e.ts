@@ -168,7 +168,9 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   // explicit mode keeps the claim independent of this surface's default, and
   // keeps a future sandbox-confinement test from being run inside /tmp — where an
   // "escape" write succeeds by design and reads as a sandbox failure.
-  expect(writableRoots(scaffold.ctx.sandboxPolicy.resolve({ mode: 'workspace-write' }))).toEqual(
+  const workspacePolicy = scaffold.ctx.sandboxPolicy.resolve({ mode: 'workspace-write' })
+  if (!('mode' in workspacePolicy)) throw new Error('workspace-write must resolve to a confined policy')
+  expect(writableRoots(workspacePolicy)).toEqual(
     expect.arrayContaining([canonicalPath('/tmp'), canonicalPath(tmpdir())]),
   )
   expect(scaffold.ctx.sandboxPolicy.defaultMode).toBe('workspace-write')

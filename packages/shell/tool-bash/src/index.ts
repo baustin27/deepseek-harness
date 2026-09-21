@@ -214,12 +214,15 @@ export function apply(ctx: Context, config: Config = {}): void {
     mode: string,
     justification: string,
     exec: ToolExecution,
-    standingPolicy: SandboxExecutionPolicy | undefined,
+    standingPolicy: ExecutionPolicy | undefined,
   ): Promise<SandboxMode> => {
     if (escalationModes.length === 0) {
       throw new Error('sandbox_permissions is not available in this composition (no sandboxing executor to escalate)')
     }
-    const effectiveMode = (standingPolicy as SandboxExecutionPolicy).mode
+    if (standingPolicy === undefined || 'profile' in standingPolicy) {
+      throw new Error('sandbox_permissions cannot escalate a developer-host-access command')
+    }
+    const effectiveMode = standingPolicy.mode
     return approveEscalation(
       { requestedMode: mode, justification, effectiveMode, subject: 'command' },
       {
