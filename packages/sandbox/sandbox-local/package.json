@@ -18,11 +18,16 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./developer-host-access": {
+      "types": "./lib/types/developer-host-access.d.ts",
+      "default": "./lib/developer-host-access.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
+    "lib/developer-host-access.js",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
