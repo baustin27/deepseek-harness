@@ -12,6 +12,7 @@ import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import type { Api, Model, OpenAICompletionsCompat, Provider } from '@earendil-works/pi-ai'
 import { resolveProfiles } from '../src/config.ts'
+import { isFreeModel } from '../src/catalog.ts'
 import { buildProvider, supportedProtocols } from '../src/provider.ts'
 import { assemble } from './assemble.ts'
 import { memoryAuth } from './auth-double.ts'
@@ -395,6 +396,18 @@ describe('hand-declared providers', () => {
     })
     expect(resolved.get('acme-gateway')?.displayName).toBe('acme-gateway')
     expect(() => resolveProfiles({ 'acme-gateway': { displayName: '' } })).toThrow(/empty displayName/)
+  })
+})
+
+describe('free-only provider routes', () => {
+  it('keeps only zero-priced catalog models and excludes paid OpenRouter entries', () => {
+    const profile = resolveProfiles({ openrouter: { freeOnly: true } }).get('openrouter')
+    const models = profile?.piProvider.getModels() ?? []
+
+    expect(models.length).toBeGreaterThan(0)
+    expect(models.every(isFreeModel)).toBe(true)
+    expect(models.some(model => model.id.endsWith(':free'))).toBe(true)
+    expect(models.some(model => model.id === 'ai21/jamba-large-1.7')).toBe(false)
   })
 })
 

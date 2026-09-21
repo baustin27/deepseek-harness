@@ -26,6 +26,7 @@ import {
   CHAT_TEMPLATE_VARS,
   MAX_TOKENS_FIELDS,
   MODALITIES,
+  isFreeModel,
   resolveRouteModels,
   SUPPORTED_THINKING_FORMATS,
   THINKING_LEVELS,
@@ -90,6 +91,8 @@ export interface PiAiProviderProfile {
   apiKeyEnv?: string
   /** Name shown by configuration surfaces; defaults to the route key. */
   displayName?: string
+  /** Restrict this route to catalog models whose complete token price is zero. */
+  freeOnly?: boolean
   /**
    * Wire protocol every model on this route speaks. Omission keeps each
    * installed catalog model's own protocol, which is why a catalog route needs
@@ -318,6 +321,7 @@ const modelOverride: z<PiAiModelOverride> = z.object(modelFields)
 const profile = z.object({
   apiKeyEnv: z.string().role('credential-ref'),
   displayName: z.string(),
+  freeOnly: z.boolean().default(false),
   api: z.union(supportedProtocols()),
   baseURL: z.string(),
   models: z.array(modelProfile),
@@ -468,9 +472,15 @@ export function resolveProfiles(
       defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
       defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
     })
+    const models = source.freeOnly === true
+      ? catalog.models.filter(isFreeModel)
+      : catalog.models
+    if (models.length === 0) {
+      throw new Error(`llm-pi-ai: provider "${provider}" freeOnly resolved no zero-priced models`)
+    }
     const streamIdleTimeoutByModel: Record<string, number | false> = {}
     for (const [modelId, timeoutMs] of Object.entries(source.streamIdleTimeoutByModel ?? {})) {
-      if (!catalog.models.some(model => model.id === modelId)) {
+      if (!models.some(model => model.id === modelId)) {
         throw new Error(`llm-pi-ai: provider "${provider}" streamIdleTimeoutByModel names unconfigured model "${modelId}"`)
       }
       validateStreamIdleTimeout(timeoutMs, `llm-pi-ai: provider "${provider}" streamIdleTimeoutByModel.${modelId}`)
@@ -490,13 +500,15 @@ export function resolveProfiles(
       retryPolicy: resolveRetryPolicy(retryPolicy, `llm-pi-ai: provider "${provider}" retryPolicy`),
       ...rest.headers === undefined ? {} : { headers: { ...rest.headers } },
       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
-      configuredMaxTokens: catalog.configuredMaxTokens,
+      configuredMaxTokens: new Map(
+        [...catalog.configuredMaxTokens].filter(([modelId]) => models.some(model => model.id === modelId)),
+      ),
       piProvider: buildProvider({
         provider,
         displayName,
         ...source.api === undefined ? {} : { api: source.api },
         ...source.baseURL === undefined ? {} : { baseURL: source.baseURL },
-        models: catalog.models,
+        models,
         namesCredential: apiKeyEnv !== undefined,
       }),
     })

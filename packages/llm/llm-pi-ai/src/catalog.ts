@@ -615,6 +615,19 @@ export interface RouteCatalogRequest {
   defaultInput: Model<Api>['input']
 }
 
+/**
+ * Whether a pi-ai catalog entry is explicitly zero-priced on every billed
+ * token dimension. Providers such as OpenRouter also expose paid models on
+ * the same route, so callers that promise a free-only picker must use the
+ * catalog's pricing metadata instead of guessing from model names.
+ */
+export function isFreeModel(model: Model<Api>): boolean {
+  return model.cost.input === 0
+    && model.cost.output === 0
+    && model.cost.cacheRead === 0
+    && model.cost.cacheWrite === 0
+}
+
 /** Report a route the deployment cannot serve, naming the settings key at fault. */
 function invalid(provider: string, detail: string): never {
   throw new Error(`llm-pi-ai: provider "${provider}" ${detail}`)
