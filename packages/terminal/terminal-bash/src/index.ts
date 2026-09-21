@@ -10,7 +10,8 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { TerminalBackendCleanupError } from '@deepseek-ai/dsh-terminal'
 import type { TerminalBackend, TerminalBackendSpawnSpec, TerminalSendOperation } from '@deepseek-ai/dsh-terminal'
 import type { SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
-import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
+import { DeveloperHostAccessUnavailableError } from '@deepseek-ai/dsh-sandbox'
+import type { DeveloperHostAccessPolicy, ExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import { ENCODING_PREAMBLE } from '@deepseek-ai/dsh-pwsh-local'
@@ -97,8 +98,13 @@ function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect)
 export const PWSH_PROMPT_SETUP =
   "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); '" + CONTROLLED_PROMPT + "' }"
 
-function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutionPolicy): string[] {
+function spawnArgv(ctx: Context, config: ResolvedConfig, policy: ExecutionPolicy): string[] {
   const argv = [config.shellPath, ...config.shellArgs]
+  if (isDeveloperHostAccessPolicy(policy)) {
+    const provider = ctx.get('developerHostAccess')
+    if (provider === undefined) throw new DeveloperHostAccessUnavailableError('host-process provider is not mounted')
+    return provider.launch(argv, policy).argv
+  }
   if (policy.mode === 'danger-full-access') return argv
   const sandbox = ctx.get('sandbox')
   if (sandbox === undefined) {
@@ -106,6 +112,10 @@ function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutio
   }
   // Re-state the discriminant because object spread does not preserve its narrowed type.
   return sandbox.confine(argv, { ...policy, mode: policy.mode }).argv
+}
+
+function isDeveloperHostAccessPolicy(policy: ExecutionPolicy): policy is DeveloperHostAccessPolicy {
+  return 'profile' in policy
 }
 
 // TODO(pty-initialize-race-home): Fold this outer abort race into
@@ -196,7 +206,7 @@ export class BashTerminalBackend implements TerminalBackend {
     if (argv[0] === undefined) throw new Error('terminal-bash: sandbox returned empty argv')
     const terminal = await this.spawnTerminal({
       argv,
-      cwd: spec.cwd ?? policy.workspaceRoot,
+      cwd: spec.cwd ?? (isDeveloperHostAccessPolicy(policy) ? policy.cwd : policy.workspaceRoot),
       env: childEnvironment(spec, this.config.shellDialect),
       rows: this.config.rows,
       cols: this.config.cols,

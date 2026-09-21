@@ -7,7 +7,12 @@
  * @module dsh-shell/types
  */
 
-import type { SandboxEnforcement, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type {
+  DeveloperHostAccessCapabilities,
+  ExecutionPolicy,
+  SandboxEnforcement,
+  SandboxMode,
+} from '@deepseek-ai/dsh-sandbox'
 import type { CollectedOutput, DshEnvironment } from '@deepseek-ai/dsh-subprocess'
 
 export { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-subprocess'
@@ -27,6 +32,11 @@ export interface ShellSandboxInfo {
   enforcement?: SandboxEnforcement
   /** Whether the sandbox runner failed before the command could run. */
   runnerFailed?: boolean
+}
+
+/** Truthful capability facts for a command launched through the host profile. */
+export interface ShellHostAccessInfo {
+  capabilities: DeveloperHostAccessCapabilities
 }
 
 /**
@@ -74,8 +84,8 @@ export interface ShellExecRequest {
    * displace a managed one.
    */
   dshEnv?: DshEnvironment | undefined
-  /** Fully resolved per-call sandbox policy; sandboxing executors default it. */
-  sandboxPolicy?: SandboxExecutionPolicy | undefined
+  /** Fully resolved per-call execution policy; sandboxing executors default it. */
+  sandboxPolicy?: ExecutionPolicy | undefined
 }
 
 /**
@@ -105,8 +115,8 @@ export interface ShellExecSpec {
   env?: Record<string, string> | undefined
   /** Managed `DSH_*` snapshot (typed to managed keys); merges after {@link env}. */
   dshEnv?: DshEnvironment | undefined
-  /** Resolved sandbox policy; ignored by executors that do not confine. */
-  sandboxPolicy: SandboxExecutionPolicy | undefined
+  /** Resolved execution policy; ignored by executors that do not select a policy. */
+  sandboxPolicy: ExecutionPolicy | undefined
 }
 
 /** The outcome of one completed (or killed) foreground run. */
@@ -133,8 +143,10 @@ export interface ShellRunResult {
   timeoutMs: number
   stdout: CollectedOutput
   stderr: CollectedOutput
-  /** Sandbox execution facts, absent for an unsandboxed executor. */
+  /** Sandbox execution facts, absent for a host-profile executor. */
   sandbox?: ShellSandboxInfo
+  /** Host-profile capability facts, absent for a confined executor. */
+  hostAccess?: ShellHostAccessInfo
 }
 
 /** Lifecycle of a background process. */
@@ -169,6 +181,8 @@ export interface ShellProcess {
   readonly done: Promise<void>
   /** Sandbox facts, stamped once a confined process settles. */
   sandbox?: ShellSandboxInfo
+  /** Host-profile capability facts, stamped once a host process starts. */
+  hostAccess?: ShellHostAccessInfo
   /**
    * Read output produced since the previous read (consuming — consecutive
    * reads never re-deliver). Reads that lost data flag `lossy` and point at

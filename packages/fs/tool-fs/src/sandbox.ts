@@ -12,7 +12,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { ExecutionPolicy, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { ESCALATION_TARGETS, approveEscalation, escalationHintMarker, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { FsError } from '@deepseek-ai/dsh-fs'
@@ -84,7 +84,7 @@ export class FsSandboxController {
    * @returns the policy to pass to the mutation, or undefined for an
    *   unsandboxed backend.
    */
-  async resolvePolicy(toolName: string, args: FsEscalationArgs, exec: ToolExecution): Promise<SandboxExecutionPolicy | undefined> {
+  async resolvePolicy(toolName: string, args: FsEscalationArgs, exec: ToolExecution): Promise<ExecutionPolicy | undefined> {
     validateEscalationArgs(args.sandbox_permissions, args.justification)
     const standingPolicy = this.policy?.resolve({ ...exec.agent ? { session: exec.agent.session } : {} })
     if (args.sandbox_permissions === undefined || args.justification === undefined) {
@@ -121,11 +121,11 @@ export class FsSandboxController {
    * @param policy - the policy stamped onto the call (names the mode in the marker).
    * @returns the error to throw — the marker `FsError` for a sandbox denial, else the original.
    */
-  mapError(error: unknown, policy: SandboxExecutionPolicy | undefined): unknown {
+  mapError(error: unknown, policy: ExecutionPolicy | undefined): unknown {
     if (!(error instanceof FsError) || error.code !== 'FS_SANDBOX_DENIED') return error
     // A FS_SANDBOX_DENIED only arises under a confining backend, whose tool
     // path always resolves a policy before mutation.
-    const mode = (policy as SandboxExecutionPolicy).mode
-    return new FsError(`${sandboxDenialMarker(mode)}\n${escalationHintMarker('operation')}`, 'FS_SANDBOX_DENIED', { cause: error })
+    if (policy === undefined || 'profile' in policy) return error
+    return new FsError(`${sandboxDenialMarker(policy.mode)}\n${escalationHintMarker('operation')}`, 'FS_SANDBOX_DENIED', { cause: error })
   }
 }

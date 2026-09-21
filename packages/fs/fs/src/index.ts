@@ -9,7 +9,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { ExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {
   FsDirEntry,
   FsEditOutcome,
@@ -237,7 +237,7 @@ export abstract class FileSystem extends Service {
     content: string,
     expected?: FsWriteIntent,
     signal?: AbortSignal,
-    sandboxPolicy?: SandboxExecutionPolicy,
+    sandboxPolicy?: ExecutionPolicy,
   ): Promise<FsWriteOutcome>
 
   /**
@@ -258,7 +258,7 @@ export abstract class FileSystem extends Service {
     edit: FsEditRequest,
     expected?: { version: FsVersion },
     signal?: AbortSignal,
-    sandboxPolicy?: SandboxExecutionPolicy,
+    sandboxPolicy?: ExecutionPolicy,
   ): Promise<FsEditOutcome>
 }
 

@@ -18,7 +18,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-shell-env'
-import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { ExecutionPolicy, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { ESCALATION_TARGETS, approveEscalation, canonicalPath, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-shell'
@@ -196,7 +196,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     throw new Error('tool-bash: the mounted bash executor confines but ctx.sandboxPolicy is missing')
   }
   /** Resolve the complete standing policy for this call when a confining executor is mounted. */
-  const resolveSandboxPolicy = (exec: ToolExecution): SandboxExecutionPolicy | undefined =>
+  const resolveSandboxPolicy = (exec: ToolExecution): ExecutionPolicy | undefined =>
     sandboxPolicy?.resolve(exec.agent === undefined ? {} : { session: exec.agent.session })
 
   /**
@@ -337,7 +337,11 @@ export function apply(ctx: Context, config: Config = {}): void {
       const policy = approvedMode === undefined
         ? standingPolicy
         : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }
-      const workdir = resolveWorkdir(args.workdir, exec, standingPolicy?.workspaceRoot)
+      const workdir = resolveWorkdir(
+        args.workdir,
+        exec,
+        standingPolicy === undefined ? undefined : ('profile' in standingPolicy ? standingPolicy.cwd : standingPolicy.workspaceRoot),
+      )
       const dshEnv = ctx.shellEnv.collect(exec)
       const request = {
         command: args.command,

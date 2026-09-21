@@ -29,6 +29,7 @@ export type {
   ShellProcessStatus,
   ShellRunResult,
   ShellSandboxInfo,
+  ShellHostAccessInfo,
   CollectedOutput,
   DshEnvironment,
   DshEnvironmentKey,

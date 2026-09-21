@@ -10,13 +10,14 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
-import { SandboxUnavailableError } from '@deepseek-ai/dsh-sandbox'
+import { DeveloperHostAccessUnavailableError, SandboxUnavailableError } from '@deepseek-ai/dsh-sandbox'
 import type {
   ConfinedArgv,
   ConfinedSandboxMode,
+  DeveloperHostAccessPolicy,
+  ExecutionPolicy,
   RunnerFailureRule,
   SandboxEnforcement,
-  SandboxExecutionPolicy,
   SandboxMode,
   SandboxPolicy,
 } from '@deepseek-ai/dsh-sandbox'
@@ -36,10 +37,10 @@ export type Config = LocalConfig
 
 /**
  * Registers as `ctx.shell` in place of the local executor and requires a
- * `ctx.sandbox` provider plus `ctx.sandboxPolicy`; the tool layer is
- * unchanged. Tool calls pass the calling session's resolved policy; direct
- * calls fall back to deployment policy. `result.sandbox` reports the mode and
- * enforcement actually used.
+ * `ctx.sandbox` provider plus `ctx.sandboxPolicy`; host-profile calls also use
+ * the optional `ctx.developerHostAccess` backend. Tool calls pass the calling
+ * session's resolved policy; direct calls fall back to deployment policy.
+ * Results report either `hostAccess` capabilities or confined `sandbox` facts.
  */
 export class SandboxBashExecutor extends LocalBashExecutor {
   static override inject = ['subprocess', 'sandbox', 'sandboxPolicy']
@@ -48,7 +49,7 @@ export class SandboxBashExecutor extends LocalBashExecutor {
   // ctx.sandboxPolicy, so this executor inherits LocalBashExecutor's Config
   // verbatim (the config catalog walks the inherited static).
 
-  private readonly mode: SandboxMode
+  private readonly mode: SandboxMode | undefined
   /**
    * Per-process confinement facts retained until settlement. Providers may
    * vary enforcement and diagnostic dialect between overlapping calls, so a
@@ -72,7 +73,7 @@ export class SandboxBashExecutor extends LocalBashExecutor {
   }
 
   /** The configured default mode — the capability fact the tool layer reads. */
-  override get sandboxMode(): SandboxMode {
+  override get sandboxMode(): SandboxMode | undefined {
     return this.mode
   }
 
@@ -86,7 +87,12 @@ export class SandboxBashExecutor extends LocalBashExecutor {
   }
 
   override async run(spec: ShellExecSpec): Promise<ShellRunResult> {
-    const policy = spec.sandboxPolicy as SandboxExecutionPolicy
+    const policy = spec.sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    if (isDeveloperHostAccessPolicy(policy)) {
+      const launched = this.launchHost(spec, policy)
+      const result = await this.runArgv(spec, launched.argv)
+      return { ...result, hostAccess: { capabilities: launched.capabilities } }
+    }
     const { mode } = policy
     if (mode === 'danger-full-access') {
       const result = await super.run(spec)
@@ -114,7 +120,13 @@ export class SandboxBashExecutor extends LocalBashExecutor {
   }
 
   override start(spec: ShellExecSpec): ShellProcess {
-    const policy = spec.sandboxPolicy as SandboxExecutionPolicy
+    const policy = spec.sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    if (isDeveloperHostAccessPolicy(policy)) {
+      const launched = this.launchHost(spec, policy)
+      const proc = this.startArgv(spec, launched.argv)
+      proc.hostAccess = { capabilities: launched.capabilities }
+      return proc
+    }
     const { mode } = policy
     if (mode === 'danger-full-access') return super.start(spec)
     // Once startArgv returns, install facts synchronously; promise settlement
@@ -166,6 +178,13 @@ export class SandboxBashExecutor extends LocalBashExecutor {
     super.onProcessDone(proc, stderr, spawnFailed, spawnError)
   }
 
+  /** Resolve the direct host argv through the selected host backend. */
+  private launchHost(spec: ShellExecSpec, policy: DeveloperHostAccessPolicy) {
+    const provider = this.ctx.get('developerHostAccess')
+    if (provider === undefined) throw new DeveloperHostAccessUnavailableError('host-process provider is not mounted')
+    return provider.launch(['bash', '-c', spec.command], policy)
+  }
+
   /**
    * Wrap one shell command via the `ctx.sandbox` provider. Provider errors
    * propagate unchanged; the returned argv is handed directly to the local
@@ -177,6 +196,10 @@ export class SandboxBashExecutor extends LocalBashExecutor {
   private confine(command: string, policy: SandboxPolicy): ConfinedArgv {
     return this.ctx.sandbox.confine(['bash', '-c', command], policy)
   }
+}
+
+function isDeveloperHostAccessPolicy(policy: ExecutionPolicy): policy is DeveloperHostAccessPolicy {
+  return 'profile' in policy
 }
 
 export default SandboxBashExecutor

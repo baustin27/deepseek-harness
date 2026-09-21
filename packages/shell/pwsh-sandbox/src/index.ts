@@ -14,13 +14,14 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
-import { SandboxUnavailableError } from '@deepseek-ai/dsh-sandbox'
+import { DeveloperHostAccessUnavailableError, SandboxUnavailableError } from '@deepseek-ai/dsh-sandbox'
 import type {
   ConfinedArgv,
   ConfinedSandboxMode,
+  DeveloperHostAccessPolicy,
+  ExecutionPolicy,
   RunnerFailureRule,
   SandboxEnforcement,
-  SandboxExecutionPolicy,
   SandboxMode,
   SandboxPolicy,
 } from '@deepseek-ai/dsh-sandbox'
@@ -41,12 +42,12 @@ export type Config = LocalConfig
 
 /**
  * Registers as `ctx.shell` in place of the local pwsh executor and requires a
- * `ctx.sandbox` provider plus `ctx.sandboxPolicy`; the tool layer carries the
+ * `ctx.sandbox` provider plus `ctx.sandboxPolicy`; host-profile calls also use
+ * the optional `ctx.developerHostAccess` backend. The tool layer carries the
  * sandbox denial rendering and escalation surface (see the
  * pwsh-tool-and-executor Agent Note). Tool calls pass the calling session's
- * resolved policy; direct calls fall back to deployment policy.
- * `result.sandbox` reports the mode, enforcement, and denial facts the tool
- * renders.
+ * resolved policy; direct calls fall back to deployment policy. Results report
+ * either host capabilities or confined sandbox facts.
  */
 /* jscpd:ignore-start -- deliberate call-for-call mirror of bash-sandbox's executor (pwsh-tool-and-executor Agent Note) */
 export class SandboxPwshExecutor extends PwshLocalExecutor {
@@ -56,7 +57,7 @@ export class SandboxPwshExecutor extends PwshLocalExecutor {
   // ctx.sandboxPolicy, so this executor inherits PwshLocalExecutor's Config
   // verbatim (the config catalog walks the inherited static).
 
-  private readonly mode: SandboxMode
+  private readonly mode: SandboxMode | undefined
   /**
    * Per-process confinement facts retained until settlement. Providers may
    * vary enforcement and diagnostic dialect between overlapping calls, so a
@@ -80,7 +81,7 @@ export class SandboxPwshExecutor extends PwshLocalExecutor {
   }
 
   /** The configured default mode — the capability fact the tool layer reads. */
-  override get sandboxMode(): SandboxMode {
+  override get sandboxMode(): SandboxMode | undefined {
     return this.mode
   }
 
@@ -94,7 +95,12 @@ export class SandboxPwshExecutor extends PwshLocalExecutor {
   }
 
   override async run(spec: ShellExecSpec): Promise<ShellRunResult> {
-    const policy = spec.sandboxPolicy as SandboxExecutionPolicy
+    const policy = spec.sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    if (isDeveloperHostAccessPolicy(policy)) {
+      const launched = this.launchHost(spec, policy)
+      const result = await this.runArgv(spec, launched.argv)
+      return { ...result, hostAccess: { capabilities: launched.capabilities } }
+    }
     const { mode } = policy
     if (mode === 'danger-full-access') {
       const result = await super.run(spec)
@@ -122,7 +128,13 @@ export class SandboxPwshExecutor extends PwshLocalExecutor {
   }
 
   override start(spec: ShellExecSpec): ShellProcess {
-    const policy = spec.sandboxPolicy as SandboxExecutionPolicy
+    const policy = spec.sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    if (isDeveloperHostAccessPolicy(policy)) {
+      const launched = this.launchHost(spec, policy)
+      const proc = this.startArgv(spec, launched.argv)
+      proc.hostAccess = { capabilities: launched.capabilities }
+      return proc
+    }
     const { mode } = policy
     if (mode === 'danger-full-access') return super.start(spec)
     // Once startArgv returns, install facts synchronously; promise settlement
@@ -172,6 +184,13 @@ export class SandboxPwshExecutor extends PwshLocalExecutor {
     super.onProcessDone(proc, stderr, spawnFailed, spawnError)
   }
 
+  /** Resolve the direct host argv through the selected host backend. */
+  private launchHost(spec: ShellExecSpec, policy: DeveloperHostAccessPolicy) {
+    const provider = this.ctx.get('developerHostAccess')
+    if (provider === undefined) throw new DeveloperHostAccessUnavailableError('host-process provider is not mounted')
+    return provider.launch(this.argv(spec), policy)
+  }
+
   /**
    * Wrap one pwsh invocation via the `ctx.sandbox` provider. Provider errors
    * propagate unchanged; the returned argv is handed directly to the local
@@ -183,6 +202,10 @@ export class SandboxPwshExecutor extends PwshLocalExecutor {
   private confine(spec: ShellExecSpec, policy: SandboxPolicy): ConfinedArgv {
     return this.ctx.sandbox.confine(this.argv(spec), policy)
   }
+}
+
+function isDeveloperHostAccessPolicy(policy: ExecutionPolicy): policy is DeveloperHostAccessPolicy {
+  return 'profile' in policy
 }
 /* jscpd:ignore-end */
 

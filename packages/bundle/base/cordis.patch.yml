@@ -211,6 +211,11 @@
     - id: sandbox
       name: '@deepseek-ai/dsh-sandbox-local'
 
+    # Host profile backend: exact argv launch in the current OS account and
+    # container. Confined profiles continue through the sandbox provider above.
+    - id: developer-host-access
+      name: '@deepseek-ai/dsh-sandbox-local/developer-host-access'
+
     - id: sandbox-policy
       name: '@deepseek-ai/dsh-sandbox-policy'
       config:

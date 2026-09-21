@@ -32,7 +32,7 @@ import type { Config as LocalConfig } from '@deepseek-ai/dsh-fs-local'
 import { FsError } from '@deepseek-ai/dsh-fs'
 import type { FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
-import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { DeveloperHostAccessPolicy, ExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import { isPathUnder } from './containment.ts'
 
@@ -55,14 +55,14 @@ export type Config = LocalConfig
 export class SandboxedFileSystem extends LocalFileSystem {
   static inject = ['sandboxPolicy']
 
-  private readonly defaultMode: SandboxMode
+  private readonly defaultMode: SandboxMode | undefined
   constructor(ctx: Context, config: Config) {
     super(ctx, config)
     this.defaultMode = ctx.sandboxPolicy.defaultMode
   }
 
   /** The deployment default mode — the capability fact the tool layer reads to advertise escalation. */
-  override get sandboxMode(): SandboxMode {
+  override get sandboxMode(): SandboxMode | undefined {
     return this.defaultMode
   }
 
@@ -82,7 +82,7 @@ export class SandboxedFileSystem extends LocalFileSystem {
     content: string,
     expected?: FsWriteIntent,
     signal?: AbortSignal,
-    sandboxPolicy?: SandboxExecutionPolicy,
+    sandboxPolicy?: ExecutionPolicy,
   ): Promise<FsWriteOutcome> {
     return super.writeText(await this.checkedTarget(target, sandboxPolicy), content, expected, signal)
   }
@@ -103,7 +103,7 @@ export class SandboxedFileSystem extends LocalFileSystem {
     edit: FsEditRequest,
     expected?: { version: FsVersion },
     signal?: AbortSignal,
-    sandboxPolicy?: SandboxExecutionPolicy,
+    sandboxPolicy?: ExecutionPolicy,
   ): Promise<FsEditOutcome> {
     return super.editText(await this.checkedTarget(target, sandboxPolicy), edit, expected, signal)
   }
@@ -119,8 +119,9 @@ export class SandboxedFileSystem extends LocalFileSystem {
    * refusal — the tool layer maps it to the model-facing `[sandbox: …]` marker
    * and the escalation hint.
    */
-  private async checkedTarget(target: FsTarget, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsTarget> {
+  private async checkedTarget(target: FsTarget, sandboxPolicy?: ExecutionPolicy): Promise<FsTarget> {
     const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    if (isDeveloperHostAccessPolicy(policy)) return target
     const { mode } = policy
     if (mode === 'danger-full-access') return target
     if (mode === 'read-only') {
@@ -142,6 +143,10 @@ export class SandboxedFileSystem extends LocalFileSystem {
     }
     return fresh
   }
+}
+
+function isDeveloperHostAccessPolicy(policy: ExecutionPolicy): policy is DeveloperHostAccessPolicy {
+  return 'profile' in policy
 }
 
 export default SandboxedFileSystem

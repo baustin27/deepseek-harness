@@ -66,7 +66,7 @@ declare module '@deepseek-ai/dsh-session/types' {
 /** One execution-profile/approval bundle and optional sandbox compatibility value. */
 export interface PresetSpec {
   /** The host profile or explicit sandbox opt-down this preset selects. */
-  executionProfile: ExecutionProfile
+  executionProfile?: ExecutionProfile
   /** The `sandbox/mode` value the preset writes through for sandbox profiles. */
   sandbox?: SandboxMode
   /** The `approval/policy` value the preset writes through. */
@@ -76,6 +76,8 @@ export interface PresetSpec {
   /** One user-facing sentence on what the preset means; omitted when not configured. */
   description?: string
 }
+
+type ResolvedPresetSpec = Omit<PresetSpec, 'executionProfile'> & { executionProfile: ExecutionProfile }
 
 /**
  * Returned when effective knob values match no table entry. Clients may show
@@ -212,11 +214,11 @@ export class PermissionPresetService extends Service {
       },
     }),
     defaultPreset: z.string(),
-  })
+  }) as unknown as z<Config>
 
   static inject = ['shell', 'approval', 'sessions', 'sessionProjections']
 
-  private readonly presets: Record<string, PresetSpec>
+  private readonly presets: Record<string, ResolvedPresetSpec>
   private defaultSettings: () => PermissionSettings
 
   constructor(ctx: Context, config: Config) {
@@ -227,7 +229,7 @@ export class PermissionPresetService extends Service {
     this.presets = Object.fromEntries(Object.entries(config.presets as Record<string, PresetSpec>).map(([name, spec]) => [
       name,
       { ...spec, executionProfile: spec.executionProfile ?? spec.sandbox ?? DEFAULT_EXECUTION_PROFILE },
-    ])) as Record<string, PresetSpec>
+    ])) as Record<string, ResolvedPresetSpec>
     if (CUSTOM_PRESET in this.presets) {
       throw new Error(`permission: "${CUSTOM_PRESET}" is reserved for the derived not-a-preset state and cannot name a table entry`)
     }
@@ -419,7 +421,7 @@ export class PermissionPresetService extends Service {
    * @returns the configured bundle.
    * @throws when `name` is not in the table.
    */
-  resolve(name: string): PresetSpec {
+  resolve(name: string): ResolvedPresetSpec {
     const spec = this.presets[name]
     if (spec === undefined) {
       throw new Error(`permission: unknown preset "${name}" (known: ${Object.keys(this.presets).join(', ')})`)

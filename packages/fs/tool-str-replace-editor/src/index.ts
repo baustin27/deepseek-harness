@@ -9,7 +9,7 @@ import z from '@deepseek-ai/schemastery'
 import { FsError } from '@deepseek-ai/dsh-fs'
 import type { FsInfo, FsTarget, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import { sandboxDenialMarker } from '@deepseek-ai/dsh-sandbox'
-import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
+import type { ExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolCallView, ToolRunContext } from '@deepseek-ai/dsh-tools'
@@ -73,16 +73,16 @@ class MutationPolicy {
     }
   }
 
-  resolve(exec: ToolRunContext): SandboxExecutionPolicy | undefined {
+  resolve(exec: ToolRunContext): ExecutionPolicy | undefined {
     return this.policy?.resolve({
       ...exec.agent === undefined ? {} : { session: exec.agent.session },
     })
   }
 
-  mapError(error: unknown, policy: SandboxExecutionPolicy | undefined): unknown {
+  mapError(error: unknown, policy: ExecutionPolicy | undefined): unknown {
     if (!(error instanceof FsError) || error.code !== 'FS_SANDBOX_DENIED') return error
-    const mode = (policy as SandboxExecutionPolicy).mode
-    return new FsError(sandboxDenialMarker(mode), 'FS_SANDBOX_DENIED', { cause: error })
+    if (policy === undefined || 'profile' in policy) return error
+    return new FsError(sandboxDenialMarker(policy.mode), 'FS_SANDBOX_DENIED', { cause: error })
   }
 }
 
