@@ -64,7 +64,7 @@ import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { toPiContext } from './context.ts'
 import { discoverModels } from './discovery.ts'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
-import { toStreamChunks } from './stream.ts'
+import { classifyPiAiError, toStreamChunks } from './stream.ts'
 
 /** Match an Atlas live id with its configured base id across the `:free` suffix. */
 function atlasLookupModelId(id: string): string {
@@ -530,6 +530,7 @@ export class PiAiAdapter extends LlmAdapter {
       ? undefined
       : idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
     const streamSignal = watchdog?.signal ?? upstream
+    let dispatched = false
 
     try {
       const containsImage = options.messages.some(message => contentHasImage(message.content))
@@ -554,6 +555,7 @@ export class PiAiAdapter extends LlmAdapter {
             maxBytes: profile.requestImageMaxBytes,
           },
         }, onReplayDegrade)
+      dispatched = true
       const events = snapshot.models.streamSimple(model, context, {
         ...profileOptions(profile, reasoning, apiKey, (options.tools?.length ?? 0) > 0),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
@@ -606,6 +608,13 @@ export class PiAiAdapter extends LlmAdapter {
       }
       if (options.signal?.aborted) {
         throw new LlmError('pi-ai request aborted by caller', 'ABORTED', { cause: error })
+      }
+      if (dispatched && !(error instanceof LlmError)) {
+        const message = error instanceof Error && error.message.length > 0 ? error.message : String(error)
+        throw new LlmError(message, classifyPiAiError(message), {
+          cause: error,
+          requestId: ProviderRequestId(requestId),
+        })
       }
       throw error
     } finally {
