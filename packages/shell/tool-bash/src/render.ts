@@ -4,7 +4,7 @@
  * @module @deepseek-ai/dsh-tool-bash/render
  */
 
-import type { ShellProcessRead, ShellRunResult, ShellSandboxInfo, CollectedOutput } from '@deepseek-ai/dsh-shell'
+import type { ShellHostAccessInfo, ShellProcessRead, ShellRunResult, ShellSandboxInfo, CollectedOutput } from '@deepseek-ai/dsh-shell'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { escalationHintMarker, sandboxDenialMarker } from '@deepseek-ai/dsh-sandbox'
 
@@ -76,6 +76,7 @@ export function renderProcessRead(
   read: ShellProcessRead,
   sandbox?: ShellSandboxInfo,
   escalationModes: readonly SandboxMode[] = [],
+  hostAccess?: ShellHostAccessInfo,
 ): string {
   const notices: string[] = []
   if (read.lossy) {
@@ -89,6 +90,10 @@ export function renderProcessRead(
     if (escalationModes.length > 0) {
       notices.push(escalationHintMarker('command'))
     }
+  }
+  if (hostAccess !== undefined) {
+    const caps = hostAccess.capabilities
+    notices.push(`[developer-host-access: backend=${caps.backend}; cwd=${caps.cwd}; roots=${caps.roots.join(',')}; network=${caps.network}; process=${caps.processVisibility}; attachments=immutable,never-mounted]`)
   }
   if (notices.length === 0) return read.delta
   return `${read.delta}${read.delta.length > 0 && !read.delta.endsWith('\n') ? '\n' : ''}${notices.join('\n')}`

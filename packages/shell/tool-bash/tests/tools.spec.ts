@@ -200,7 +200,8 @@ async function setupSandboxed(withApproval = false) {
   await ctx.plugin(ToolTasks)
   await ctx.plugin(SessionProjectionRegistry)
   ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
-  await ctx.plugin(SandboxPolicyService, {})
+  // Production defaults to host access; these fake confinement tests opt down.
+  await ctx.plugin(SandboxPolicyService, { mode: 'read-only' })
   await ctx.plugin(RecordingSandboxExecutor)
   if (withApproval) await ctx.plugin(ApprovalService)
   await ctx.plugin(BashEnvPlugin)

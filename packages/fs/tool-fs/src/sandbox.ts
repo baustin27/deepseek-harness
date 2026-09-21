@@ -41,9 +41,10 @@ export class FsSandboxController {
   private readonly policy: SandboxPolicyService | undefined
 
   constructor(private readonly ctx: Context) {
-    const defaultMode = ctx.fs.sandboxMode
+    const policy = ctx.get('sandboxPolicy')
+    const defaultMode = ctx.fs.sandboxMode ?? policy?.defaultMode
     this.escalationModes = defaultMode === undefined ? [] : ESCALATION_TARGETS
-    this.policy = defaultMode === undefined ? undefined : ctx.get('sandboxPolicy')
+    this.policy = policy
     if (defaultMode !== undefined && this.policy === undefined) {
       throw new Error('tool-fs: the mounted filesystem confines but ctx.sandboxPolicy is missing')
     }

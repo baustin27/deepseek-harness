@@ -32,7 +32,7 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 import type { ExecutionPolicy, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { ESCALATION_TARGETS, approveEscalation, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
-import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
+import type { ShellHostAccessInfo, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { parseExitStatus } from '@deepseek-ai/dsh-shell'
 import { processOutcome } from './background.ts'
 import { renderPwshProcessRead, renderPwshResult } from './render.ts'
@@ -156,6 +156,20 @@ function resolveWorkdir(modelWorkdir: string | undefined, exec: { agent?: Agent 
 }
 
 /** Detach the executor DTO from readonly Service Definition types into plain JSON data. */
+function canonicalHostAccess(info: ShellHostAccessInfo) {
+  const capabilities = info.capabilities
+  return {
+    profile: capabilities.profile,
+    backend: capabilities.backend,
+    filesystem: capabilities.filesystem,
+    roots: [...capabilities.roots],
+    cwd: capabilities.cwd,
+    network: capabilities.network,
+    processVisibility: capabilities.processVisibility,
+    attachments: { mounted: capabilities.attachments.mounted, immutable: capabilities.attachments.immutable },
+  }
+}
+
 function canonicalPwshResult(result: ShellRunResult): PwshForegroundResult {
   const output = (stream: ShellRunResult['stdout']) => ({
     text: stream.text,
@@ -180,6 +194,7 @@ function canonicalPwshResult(result: ShellRunResult): PwshForegroundResult {
         ...result.sandbox.runnerFailed !== undefined ? { runnerFailed: result.sandbox.runnerFailed } : {},
       },
     } : {},
+    ...result.hostAccess !== undefined ? { hostAccess: canonicalHostAccess(result.hostAccess) } : {},
   }
 }
 
@@ -188,14 +203,36 @@ const BACKGROUND_OUTPUT_PROPERTIES = {
   kind: { type: 'string', required: true, const: 'background' },
   jobId: { type: 'string', required: true },
 } as const
+
+const HOST_ACCESS_PROPERTIES = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    profile: { type: 'string', required: true, const: 'developer-host-access' },
+    backend: { type: 'string', required: true, const: 'host-process' },
+    filesystem: { type: 'string', required: true, const: 'host' },
+    roots: { type: 'array', required: true, items: { type: 'string' } },
+    cwd: { type: 'string', required: true },
+    network: { type: 'string', required: true, const: 'host' },
+    processVisibility: { type: 'string', required: true, const: 'host' },
+    attachments: {
+      type: 'object', required: true, additionalProperties: false,
+      properties: {
+        mounted: { type: 'boolean', required: true, const: false },
+        immutable: { type: 'boolean', required: true, const: true },
+      },
+    },
+  },
+} as const
 /* jscpd:ignore-end */
 
 /* jscpd:ignore-start -- deliberate mirror of dsh-tool-bash's apply() preamble (pwsh-tool-and-executor Agent Note). */
 export function apply(ctx: Context, config: Config = {}): void {
   const backgroundEnabled = config.enableRunInBackground ?? true
-  const defaultMode = ctx.shell.sandboxMode
+  const sandboxPolicy: SandboxPolicyService | undefined = ctx.get('sandboxPolicy')
+  const sandboxAvailable = ctx.get('sandbox') !== undefined && sandboxPolicy !== undefined
+  const defaultMode = ctx.shell.sandboxMode ?? (sandboxAvailable ? sandboxPolicy.defaultMode : undefined)
   const escalationModes: readonly SandboxMode[] = defaultMode === undefined ? [] : ESCALATION_TARGETS
-  const sandboxPolicy: SandboxPolicyService | undefined = defaultMode === undefined ? undefined : ctx.get('sandboxPolicy')
   if (defaultMode !== undefined && sandboxPolicy === undefined) {
     throw new Error('tool-pwsh: the mounted bash executor confines but ctx.sandboxPolicy is missing')
   }
@@ -333,6 +370,7 @@ export function apply(ctx: Context, config: Config = {}): void {
                   runnerFailed: { type: 'boolean' },
                 },
               },
+              hostAccess: HOST_ACCESS_PROPERTIES,
             },
           },
         ],
@@ -389,7 +427,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             return {
               cancel: () => void proc.kill(),
               done: proc.done.then(() => processOutcome(proc)),
-              readOutput: () => renderPwshProcessRead(proc.readOutput(), proc.sandbox, escalationModes),
+              readOutput: () => renderPwshProcessRead(proc.readOutput(), proc.sandbox, escalationModes, proc.hostAccess),
             }
           },
         })

@@ -22,7 +22,7 @@ import type { ExecutionPolicy, SandboxExecutionPolicy, SandboxMode } from '@deep
 import { ESCALATION_TARGETS, approveEscalation, canonicalPath, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-shell'
-import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
+import type { ShellHostAccessInfo, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { processOutcome } from './background.ts'
 import { parseExitStatus, renderProcessRead, renderResult } from './render.ts'
 
@@ -156,6 +156,20 @@ function resolveWorkdir(
 }
 
 /** Detach the executor DTO from readonly Service Definition types into plain JSON data. */
+function canonicalHostAccess(info: ShellHostAccessInfo) {
+  const capabilities = info.capabilities
+  return {
+    profile: capabilities.profile,
+    backend: capabilities.backend,
+    filesystem: capabilities.filesystem,
+    roots: [...capabilities.roots],
+    cwd: capabilities.cwd,
+    network: capabilities.network,
+    processVisibility: capabilities.processVisibility,
+    attachments: { mounted: capabilities.attachments.mounted, immutable: capabilities.attachments.immutable },
+  }
+}
+
 function canonicalBashResult(result: ShellRunResult) {
   const output = (stream: ShellRunResult['stdout']) => ({
     text: stream.text,
@@ -178,6 +192,7 @@ function canonicalBashResult(result: ShellRunResult) {
         ...result.sandbox.runnerFailed !== undefined ? { runnerFailed: result.sandbox.runnerFailed } : {},
       },
     } : {},
+    ...result.hostAccess !== undefined ? { hostAccess: canonicalHostAccess(result.hostAccess) } : {},
   }
 }
 
@@ -187,11 +202,33 @@ const BACKGROUND_OUTPUT_PROPERTIES = {
   jobId: { type: 'string', required: true },
 } as const
 
+const HOST_ACCESS_PROPERTIES = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    profile: { type: 'string', required: true, const: 'developer-host-access' },
+    backend: { type: 'string', required: true, const: 'host-process' },
+    filesystem: { type: 'string', required: true, const: 'host' },
+    roots: { type: 'array', required: true, items: { type: 'string' } },
+    cwd: { type: 'string', required: true },
+    network: { type: 'string', required: true, const: 'host' },
+    processVisibility: { type: 'string', required: true, const: 'host' },
+    attachments: {
+      type: 'object', required: true, additionalProperties: false,
+      properties: {
+        mounted: { type: 'boolean', required: true, const: false },
+        immutable: { type: 'boolean', required: true, const: true },
+      },
+    },
+  },
+} as const
+
 export function apply(ctx: Context, config: Config = {}): void {
   const backgroundEnabled = config.enableRunInBackground ?? true
-  const defaultMode = ctx.shell.sandboxMode
+  const sandboxPolicy: SandboxPolicyService | undefined = ctx.get('sandboxPolicy')
+  const sandboxAvailable = ctx.get('sandbox') !== undefined && sandboxPolicy !== undefined
+  const defaultMode = ctx.shell.sandboxMode ?? (sandboxAvailable ? sandboxPolicy.defaultMode : undefined)
   const escalationModes: readonly SandboxMode[] = defaultMode === undefined ? [] : ESCALATION_TARGETS
-  const sandboxPolicy: SandboxPolicyService | undefined = defaultMode === undefined ? undefined : ctx.get('sandboxPolicy')
   if (defaultMode !== undefined && sandboxPolicy === undefined) {
     throw new Error('tool-bash: the mounted bash executor confines but ctx.sandboxPolicy is missing')
   }
@@ -319,6 +356,7 @@ export function apply(ctx: Context, config: Config = {}): void {
                   runnerFailed: { type: 'boolean' },
                 },
               },
+              hostAccess: HOST_ACCESS_PROPERTIES,
             },
           },
         ],
@@ -327,7 +365,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         type: 'text',
         text: value.kind === 'background'
           ? `started background job ${value.jobId}`
-          : renderResult(value as { kind: 'foreground' } & ShellRunResult, escalationModes),
+          : renderResult(value as unknown as { kind: 'foreground' } & ShellRunResult, escalationModes),
       }],
     },
     async execute(args: BashToolArgs, exec) {
@@ -378,7 +416,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             return {
               cancel: () => void proc.kill(),
               done: proc.done.then(() => processOutcome(proc)),
-              readOutput: () => renderProcessRead(proc.readOutput(), proc.sandbox, escalationModes),
+              readOutput: () => renderProcessRead(proc.readOutput(), proc.sandbox, escalationModes, proc.hostAccess),
             }
           },
         })

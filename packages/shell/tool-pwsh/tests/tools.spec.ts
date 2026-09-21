@@ -228,7 +228,8 @@ async function setupSandboxed(withApproval = false) {
   // bench — the loop itself is not composed. Register its open-turn fold so
   // the approval service's turn-enclosure gate reads the seeded log shape.
   ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
-  await ctx.plugin(SandboxPolicyService, {})
+  // Production defaults to host access; these fake confinement tests opt down.
+  await ctx.plugin(SandboxPolicyService, { mode: 'read-only' })
   await ctx.plugin(ConfiningFakeBash)
   if (withApproval) await ctx.plugin(ApprovalService)
   await ctx.plugin(ToolPwsh)

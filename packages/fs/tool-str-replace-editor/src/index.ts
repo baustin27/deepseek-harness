@@ -67,7 +67,7 @@ class MutationPolicy {
   private readonly policy: SandboxPolicyService | undefined
 
   constructor(ctx: Context) {
-    this.policy = ctx.fs.sandboxMode === undefined ? undefined : ctx.get('sandboxPolicy')
+    this.policy = ctx.get('sandboxPolicy')
     if (ctx.fs.sandboxMode !== undefined && this.policy === undefined) {
       throw new Error('tool-str-replace-editor: the mounted filesystem confines but ctx.sandboxPolicy is missing')
     }

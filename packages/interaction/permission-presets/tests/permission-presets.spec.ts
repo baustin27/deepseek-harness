@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { ExecutionProfile, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import { SandboxProvider } from '@deepseek-ai/dsh-sandbox'
+import type { ConfinedArgv, ExecutionProfile, SandboxMode, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import PermissionPresetService, {
   CUSTOM_PRESET, PERMISSION_SETTINGS_NAMESPACE,
@@ -21,6 +22,17 @@ const TEST_PRESETS: NonNullable<Config['presets']> = {
     executionProfile: 'danger-full-access', sandbox: 'danger-full-access', approval: 'never',
     description: 'Full file access without approval prompts.',
   },
+}
+
+class TestSandboxProvider extends SandboxProvider {
+  confine(argv: readonly string[], _policy: SandboxPolicy): ConfinedArgv {
+    return {
+      argv: [...argv],
+      enforcement: 'full',
+      denialSignatures: [],
+      runnerFailureRules: [],
+    }
+  }
 }
 
 class MemorySettings extends SettingsProvider {
@@ -43,9 +55,11 @@ async function mounted(options: {
   approvalDefault?: ApprovalPolicy | undefined
   executionProfile?: ExecutionProfile
   projection?: boolean
+  sandboxProvider?: boolean
 } = {}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
+  if (options.sandboxProvider !== false) await ctx.plugin(TestSandboxProvider)
   if (options.projection !== false) await ctx.plugin(SessionProjectionRegistry)
   ctx.provide('shell', {
     sandboxMode: 'bashDefault' in options ? options.bashDefault : 'workspace-write',
@@ -73,6 +87,7 @@ async function mountedStore(options: {
 } = {}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
+  await ctx.plugin(TestSandboxProvider)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(MemorySettings)
   ctx.provide('shell', {
@@ -210,8 +225,13 @@ describe('PermissionPresetService', () => {
   })
 
   it('rejects composition over a non-confining executor at load', async () => {
-    await expect(mounted({ bashDefault: undefined }))
-      .rejects.toThrow(/does not (?:confine|expose sandboxMode)/)
+    let failure: unknown
+    try {
+      await mounted({ bashDefault: undefined, sandboxProvider: false })
+    } catch (error) {
+      failure = error
+    }
+    expect(String(failure)).toMatch(/does not expose (?:a )?sandbox provider/)
   })
 
   it('optionOf() presents shipped labels/descriptions, falls back to the raw key, and fixes custom', async () => {
@@ -301,6 +321,7 @@ describe('new-session default', () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TestSandboxProvider)
     ctx.provide('shell', {
       sandboxMode: 'workspace-write',
       resolve() { throw new Error('permission tests do not execute bash') },
@@ -322,6 +343,7 @@ describe('new-session default', () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TestSandboxProvider)
     ctx.provide('shell', {
       sandboxMode: 'workspace-write',
       resolve() { throw new Error('permission tests do not execute bash') },
