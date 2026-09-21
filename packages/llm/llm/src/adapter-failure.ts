@@ -7,6 +7,10 @@
 import { HarnessError } from './error.ts'
 import type { LlmFailure } from './types.ts'
 
+// Keep live transport causes available to recovery without putting Error objects
+// into durable session events or JSON-serializable failure facts.
+const failureCauses = new WeakMap<object, unknown>()
+
 /**
  * Detach serializable provider facts from a value thrown by an adapter.
  * @param value - arbitrary value thrown during adapter dispatch or iteration.
@@ -20,11 +24,21 @@ export function normalizeLlmFailure(value: unknown): LlmFailure {
   // Cross-package copies preserve own data but not class identity. Trust the
   // carried facts only when both own properties agree after validation.
   const carried = ownFailureSnapshot(error)
-  if (carried !== undefined && carried.code === ownErrorCode(error)) return carried
-  return Object.freeze({
+  if (carried !== undefined && carried.code === ownErrorCode(error)) {
+    failureCauses.set(carried, error)
+    return carried
+  }
+  const failure = Object.freeze({
     message: errorMessage(error),
     code: harnessErrorCode(error),
   })
+  failureCauses.set(failure, error)
+  return failure
+}
+
+/** Recover the live adapter error while keeping durable failure facts serializable. */
+export function failureCause(failure: LlmFailure): unknown {
+  return failureCauses.get(failure as object)
 }
 
 /** Render a non-Error throw without letting hostile coercion escape normalization. */

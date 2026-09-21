@@ -20,6 +20,7 @@ import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@
 import {
   LlmError,
   createAssistantMessage,
+  failureCause,
   errorChain,
   markAgentLoopRequest,
 } from '@deepseek-ai/dsh-llm'
@@ -442,7 +443,15 @@ export class ReactLoopAgent implements Agent {
           )
           signal.throwIfAborted()
           if (action?.kind !== 'retry') {
-            throw new LlmError(finish.failure.message, finish.failure.code, finish.failure)
+            const cause = failureCause(finish.failure)
+            throw new LlmError(
+              finish.failure.message,
+              finish.failure.code,
+              {
+                ...finish.failure,
+                ...cause === undefined ? {} : { cause },
+              },
+            )
           }
           continue
         }

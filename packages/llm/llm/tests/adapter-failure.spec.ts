@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeLlmFailure } from '../src/adapter-failure.ts'
+import { failureCause, normalizeLlmFailure } from '../src/adapter-failure.ts'
 
 describe('adapter failure normalization', () => {
+  it('keeps the live cause out of durable facts while exposing it to recovery', () => {
+    const cause = new Error('socket closed')
+    const failure = normalizeLlmFailure(cause)
+    expect(failureCause(failure)).toBe(cause)
+    expect(JSON.stringify(failure)).toBe(JSON.stringify({ message: 'socket closed', code: 'UNKNOWN' }))
+  })
+
   it('contains hostile non-Error coercion', () => {
     const thrown = { [Symbol.toPrimitive]: () => { throw new Error('coercion failed') } }
     expect(normalizeLlmFailure(thrown)).toEqual({ message: 'LLM adapter failed', code: 'UNKNOWN' })
