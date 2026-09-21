@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { ExecutionProfile, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import PermissionPresetService, {
   CUSTOM_PRESET, PERMISSION_SETTINGS_NAMESPACE,
@@ -12,6 +12,17 @@ import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
 /** Writable memory provider for the permission/settings lifecycle specs. */
+const TEST_PRESETS: NonNullable<Config['presets']> = {
+  'workspace-write': {
+    executionProfile: 'workspace-write', sandbox: 'workspace-write', approval: 'ask',
+    description: 'Write inside the workspace and permitted temporary directories; wider retries require approval.',
+  },
+  'danger-full-access': {
+    executionProfile: 'danger-full-access', sandbox: 'danger-full-access', approval: 'never',
+    description: 'Full file access without approval prompts.',
+  },
+}
+
 class MemorySettings extends SettingsProvider {
   readonly doc: Record<string, unknown> = {}
   readonly writable = true
@@ -30,6 +41,7 @@ async function mounted(options: {
   config?: Config
   bashDefault?: SandboxMode | undefined
   approvalDefault?: ApprovalPolicy | undefined
+  executionProfile?: ExecutionProfile
   projection?: boolean
 } = {}): Promise<Context> {
   const ctx = new Context()
@@ -42,7 +54,12 @@ async function mounted(options: {
     start() { throw new Error('permission tests do not execute bash') },
   })
   ctx.provide('approval', { config: { policy: 'approvalDefault' in options ? options.approvalDefault : 'ask' } })
-  await ctx.plugin(PermissionPresetService, options.config ?? {})
+  ctx.provide('sandboxPolicy', {
+    defaultProfile: options.executionProfile ?? 'workspace-write',
+    profileOf: () => undefined,
+  })
+  const config = options.config ?? { presets: TEST_PRESETS, defaultPreset: 'workspace-write' }
+  await ctx.plugin(PermissionPresetService, config)
   return ctx
 }
 
@@ -50,7 +67,10 @@ function freshSession(id: string): Session {
   return Session.create(SessionId(id))
 }
 
-async function mountedStore(options: { approvalDefault?: ApprovalPolicy | undefined } = {}): Promise<Context> {
+async function mountedStore(options: {
+  approvalDefault?: ApprovalPolicy | undefined
+  executionProfile?: ExecutionProfile
+} = {}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
@@ -64,7 +84,14 @@ async function mountedStore(options: { approvalDefault?: ApprovalPolicy | undefi
   ctx.provide('approval', {
     config: { policy: 'approvalDefault' in options ? options.approvalDefault : 'ask' },
   })
-  await ctx.plugin(PermissionPresetService, {})
+  ctx.provide('sandboxPolicy', {
+    defaultProfile: options.executionProfile ?? 'workspace-write',
+    profileOf: () => undefined,
+  })
+  await ctx.plugin(PermissionPresetService, {
+    presets: TEST_PRESETS,
+    defaultPreset: 'workspace-write',
+  })
   return ctx
 }
 
@@ -153,6 +180,7 @@ describe('PermissionPresetService', () => {
     ctx.permissionPresets.set(session, 'danger-full-access')
     expect(session.snapshotEvents().map(e => [e.type, e.data])).toEqual([
       ['permission/preset', { preset: 'danger-full-access' }],
+      ['execution/profile', { profile: 'danger-full-access' }],
       ['sandbox/mode', { mode: 'danger-full-access' }],
       ['approval/policy', { policy: 'never' }],
     ])
@@ -182,7 +210,7 @@ describe('PermissionPresetService', () => {
 
   it('rejects composition over a non-confining executor at load', async () => {
     await expect(mounted({ bashDefault: undefined }))
-      .rejects.toThrow(/does not confine/)
+      .rejects.toThrow(/does not (?:confine|expose sandboxMode)/)
   })
 
   it('optionOf() presents shipped labels/descriptions, falls back to the raw key, and fixes custom', async () => {
@@ -231,7 +259,7 @@ describe('new-session default', () => {
     expect(ctx.permissionPresets.current(first)).toBe('workspace-write')
     expect(ctx.permissionPresets.current(second)).toBe('danger-full-access')
     expect(second.snapshotEvents().map(event => event.type)).toEqual([
-      'permission/preset', 'sandbox/mode', 'approval/policy',
+      'permission/preset', 'execution/profile', 'sandbox/mode', 'approval/policy',
     ])
   })
 
@@ -245,8 +273,8 @@ describe('new-session default', () => {
     legacy.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     const resumed = ctx.sessions.create(SessionId('legacy-resumed'), { seed: legacy.snapshotEvents() })
     expect(ctx.permissionPresets.current(resumed)).toBe('workspace-write')
-    expect(resumed.snapshotEvents().slice(-3).map(event => event.type)).toEqual([
-      'permission/preset', 'sandbox/mode', 'approval/policy',
+    expect(resumed.snapshotEvents().slice(-4).map(event => event.type)).toEqual([
+      'permission/preset', 'execution/profile', 'sandbox/mode', 'approval/policy',
     ])
   })
 
@@ -278,7 +306,7 @@ describe('new-session default', () => {
 
     await ctx.plugin(PermissionPresetService, {})
     expect(existing.snapshotEvents().map(event => event.type)).toEqual([
-      'permission/preset', 'sandbox/mode', 'approval/policy',
+      'permission/preset', 'execution/profile', 'sandbox/mode', 'approval/policy',
     ])
     expect(ctx.permissionPresets.current(existing)).toBe('workspace-write')
   })
@@ -314,10 +342,10 @@ describe('new-session default', () => {
     partial.append('sandbox/mode', { mode: 'workspace-write' })
     partial.append('approval/policy', { policy: 'ask' })
     const resumed = ctx.sessions.create(SessionId('partial-resumed'), { seed: partial.snapshotEvents() })
-    expect(resumed.snapshotEvents().at(-1)).toMatchObject({
-      type: 'permission/preset',
-      data: { preset: 'workspace-write' },
-    })
+    expect(resumed.snapshotEvents().slice(-2)).toEqual([
+      expect.objectContaining({ type: 'permission/preset', data: { preset: 'workspace-write' } }),
+      expect.objectContaining({ type: 'execution/profile', data: { profile: 'workspace-write' } }),
+    ])
 
     const custom = freshSession('custom-source')
     custom.append('sandbox/mode', { mode: 'read-only' })

@@ -14,8 +14,17 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { SANDBOX_MODES, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
+import {
+  DEVELOPER_HOST_ACCESS_PROFILE,
+  type ExecutionProfile,
+  type SandboxMode,
+} from '@deepseek-ai/dsh-sandbox'
+import {
+  DEFAULT_EXECUTION_PROFILE,
+  SANDBOX_MODES,
+  setExecutionProfile,
+  setSandboxMode,
+} from '@deepseek-ai/dsh-sandbox-policy'
 // Side-effect type import: declaration-merges `ctx.shell` (the capability fact
 // `sandboxMode` this service reads), without a value dependency on the seam.
 import type {} from '@deepseek-ai/dsh-shell'
@@ -54,10 +63,12 @@ declare module '@deepseek-ai/dsh-session/types' {
   }
 }
 
-/** One preset's sandbox/approval bundle and optional client presentation. */
+/** One execution-profile/approval bundle and optional sandbox compatibility value. */
 export interface PresetSpec {
-  /** The `sandbox/mode` value the preset writes through. */
-  sandbox: SandboxMode
+  /** The host profile or explicit sandbox opt-down this preset selects. */
+  executionProfile: ExecutionProfile
+  /** The `sandbox/mode` value the preset writes through for sandbox profiles. */
+  sandbox?: SandboxMode
   /** The `approval/policy` value the preset writes through. */
   approval: ApprovalPolicy
   /** The display label a client shows for this preset; the raw table key when omitted. */
@@ -82,6 +93,8 @@ export const PERMISSION_SETTINGS_NAMESPACE = 'permission'
 export interface KnobState {
   /** Last `permission/preset` payload, or null. */
   preset: string | null
+  /** Last `execution/profile` payload, or null. */
+  executionProfile: ExecutionProfile | null
   /** Last `sandbox/mode` payload, or null. */
   sandbox: SandboxMode | null
   /** Last `approval/policy` payload, or null. */
@@ -96,6 +109,12 @@ interface PermissionProjectionState extends KnobState {
 
 const permissionStateSchema: zod.ZodType<PermissionProjectionState> = zod.object({
   preset: zod.string().nullable(),
+  executionProfile: zod.union([
+    zod.literal(DEVELOPER_HOST_ACCESS_PROFILE),
+    zod.literal('read-only'),
+    zod.literal('workspace-write'),
+    zod.literal('danger-full-access'),
+  ]).nullable(),
   sandbox: zod.union([
     zod.literal('read-only'),
     zod.literal('workspace-write'),
@@ -106,7 +125,7 @@ const permissionStateSchema: zod.ZodType<PermissionProjectionState> = zod.object
 }).strict()
 
 /** State for the empty log: every knob at its composition default. */
-const EMPTY_KNOBS: KnobState = { preset: null, sandbox: null, approval: null }
+const EMPTY_KNOBS: KnobState = { preset: null, executionProfile: null, sandbox: null, approval: null }
 
 /**
  * One-event permission-state transition (the projection unit's `apply`). Unrelated
@@ -122,6 +141,8 @@ function applyPermissionEvent(
   switch (event.type) {
     case 'permission/preset':
       return { ...state, preset: event.data.preset }
+    case 'execution/profile':
+      return { ...state, executionProfile: event.data.profile }
     case 'sandbox/mode':
       return { ...state, sandbox: event.data.mode }
     case 'approval/policy':
@@ -142,9 +163,10 @@ export interface PermissionSettings {
 /** The {@link PermissionPresetService} config: preset table and composition default. */
 export interface Config {
   /**
-   * The preset table: name → knob bundle. Defaults to `workspace-write`
-   * (workspace-write + ask) and `danger-full-access` (danger-full-access +
-   * never). The name `custom` is reserved for the derived not-a-preset state.
+   * The preset table: name → execution-profile/approval bundle. Defaults to
+   * `developer-host-access` (direct host access + never), plus the explicit
+   * `read-only`, `workspace-write`, and `danger-full-access` sandbox opt-downs.
+   * The name `custom` is reserved for the derived not-a-preset state.
    */
   presets?: Record<string, PresetSpec>
   /**
@@ -163,18 +185,30 @@ export class PermissionPresetService extends Service {
   // Inline schema call: the config catalog walks `static Config` statically.
   static Config: z<Config> = z.object({
     presets: z.dict(z.object({
-      sandbox: z.union(SANDBOX_MODES as SandboxMode[]).required(),
+      // Omitted on legacy user patches: normalize from `sandbox` below while
+      // requiring every built-in profile to be explicit.
+      executionProfile: z.union(['developer-host-access', ...SANDBOX_MODES] as ExecutionProfile[]),
+      sandbox: z.union(SANDBOX_MODES as SandboxMode[]),
       approval: z.union(APPROVAL_POLICIES as ApprovalPolicy[]).required(),
       name: z.string(),
       description: z.string(),
     })).default({
+      [DEVELOPER_HOST_ACCESS_PROFILE]: {
+        executionProfile: DEVELOPER_HOST_ACCESS_PROFILE, approval: 'never',
+        name: DEVELOPER_HOST_ACCESS_PROFILE,
+        description: 'Run directly in the current OS account and container with host filesystem, network, and process visibility; attachments remain immutable and are never mounted.',
+      },
+      'read-only': {
+        executionProfile: 'read-only', sandbox: 'read-only', approval: 'ask',
+        name: 'read-only', description: 'Read files without allowing standing file modifications; wider retries require approval.',
+      },
       'workspace-write': {
-        sandbox: 'workspace-write', approval: 'ask',
+        executionProfile: 'workspace-write', sandbox: 'workspace-write', approval: 'ask',
         name: 'workspace-write', description: 'Write inside the workspace and permitted temporary directories; wider retries require approval.',
       },
       'danger-full-access': {
-        sandbox: 'danger-full-access', approval: 'never',
-        name: 'danger-full-access', description: 'Full file access without approval prompts.',
+        executionProfile: 'danger-full-access', sandbox: 'danger-full-access', approval: 'never',
+        name: 'danger-full-access', description: 'Full file access without sandbox confinement or approval prompts.',
       },
     }),
     defaultPreset: z.string(),
@@ -187,13 +221,27 @@ export class PermissionPresetService extends Service {
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'permissionPresets')
-    // The schema defaulted the table — the cast records that runtime fact.
-    this.presets = config.presets as Record<string, PresetSpec>
+    // Normalize legacy patches that predate the separate execution-profile
+    // field: an explicit sandbox value remains the opt-down profile, while a
+    // sandbox-less entry inherits the host profile default.
+    this.presets = Object.fromEntries(Object.entries(config.presets as Record<string, PresetSpec>).map(([name, spec]) => [
+      name,
+      { ...spec, executionProfile: spec.executionProfile ?? spec.sandbox ?? DEFAULT_EXECUTION_PROFILE },
+    ])) as Record<string, PresetSpec>
     if (CUSTOM_PRESET in this.presets) {
       throw new Error(`permission: "${CUSTOM_PRESET}" is reserved for the derived not-a-preset state and cannot name a table entry`)
     }
-    if (ctx.shell.sandboxMode === undefined) {
-      throw new Error('permission: the mounted bash executor does not confine (no sandboxMode) — presets bundle a sandbox mode, so composing this plugin over an unconfined executor is a misconfiguration')
+    const hasSandboxOptDown = Object.values(this.presets).some(spec => spec.executionProfile !== DEVELOPER_HOST_ACCESS_PROFILE)
+    if (hasSandboxOptDown && ctx.shell.sandboxMode === undefined) {
+      throw new Error('permission: the mounted bash executor does not expose sandboxMode required by a sandbox opt-down preset')
+    }
+    for (const [name, spec] of Object.entries(this.presets)) {
+      if (spec.executionProfile === DEVELOPER_HOST_ACCESS_PROFILE && spec.sandbox !== undefined) {
+        throw new Error(`permission: host profile preset "${name}" must omit sandbox; host access is not danger-full-access`)
+      }
+      if (spec.executionProfile !== DEVELOPER_HOST_ACCESS_PROFILE && spec.sandbox !== spec.executionProfile) {
+        throw new Error(`permission: sandbox preset "${name}" must set sandbox to its executionProfile`)
+      }
     }
     const inferredDefault = this.derive(EMPTY_KNOBS)
     const defaultPreset = config.defaultPreset ?? inferredDefault
@@ -236,7 +284,7 @@ export class PermissionPresetService extends Service {
     }) as unknown as zod.ZodType<PermissionSelect>
     ctx.sessionProjections.register({
       key: 'permissions',
-      stateVersion: 2,
+      stateVersion: 3,
       stateSchema: permissionStateSchema,
       init: () => ({ ...EMPTY_KNOBS, seeded: false }),
       apply: applyPermissionEvent,
@@ -310,10 +358,34 @@ export class PermissionPresetService extends Service {
   }
 
   /** Resolve the preset for one folded knob state (the shared mathematics of `current` and the projection unit). */
+  private defaultExecutionProfile(): ExecutionProfile {
+    const policy = this.ctx.get('sandboxPolicy')
+    // A policy service is present in every shipped profile. Stand-alone callers
+    // without it retain the legacy shell default, while an unconfined shell
+    // correctly falls back to the host profile.
+    return policy?.defaultProfile ?? this.ctx.shell.sandboxMode ?? DEFAULT_EXECUTION_PROFILE
+  }
+
+  /** Resolve the profile represented by one folded state, retaining legacy sandbox events. */
+  private executionProfileOf(state: KnobState): ExecutionProfile {
+    return state.executionProfile ?? state.sandbox ?? this.defaultExecutionProfile()
+  }
+
+  /** Resolve the compatibility sandbox value; host access deliberately ignores stale sandbox events. */
+  private sandboxOf(state: KnobState, profile: ExecutionProfile): SandboxMode | undefined {
+    if (profile === DEVELOPER_HOST_ACCESS_PROFILE) return undefined
+    return state.sandbox ?? profile
+  }
+
   private derive(state: KnobState): string {
-    const sandbox = state.sandbox ?? this.ctx.shell.sandboxMode
+    const executionProfile = this.executionProfileOf(state)
+    const sandbox = this.sandboxOf(state, executionProfile)
     const approval = state.approval ?? this.ctx.approval.config.policy ?? 'ask'
-    const matches = (spec: PresetSpec): boolean => spec.sandbox === sandbox && spec.approval === approval
+    const matches = (spec: PresetSpec): boolean => (
+      spec.executionProfile === executionProfile
+      && spec.sandbox === sandbox
+      && spec.approval === approval
+    )
     if (state.preset !== null) {
       const spec = this.presets[state.preset]
       if (spec !== undefined && matches(spec)) return state.preset
@@ -387,7 +459,10 @@ export class PermissionPresetService extends Service {
       session.append('permission/preset', { preset: name })
     }
     const knobs = this.permissionState(session)
-    if (spec.sandbox !== (knobs.sandbox ?? this.ctx.shell.sandboxMode)) {
+    if (spec.executionProfile !== this.executionProfileOf(knobs)) {
+      setExecutionProfile(session, spec.executionProfile)
+    }
+    if (spec.sandbox !== undefined && spec.sandbox !== this.sandboxOf(knobs, this.executionProfileOf(knobs))) {
       setSandboxMode(session, spec.sandbox)
     }
     if (spec.approval !== (knobs.approval ?? this.ctx.approval.config.policy ?? 'ask')) {
@@ -407,11 +482,12 @@ export class PermissionPresetService extends Service {
     const sandbox = state.sandbox
     const approval = state.approval
     const seeded = state.seeded
-    if (selected === null && sandbox === null && approval === null && !seeded) {
+    if (selected === null && state.executionProfile === null && sandbox === null && approval === null && !seeded) {
       const name = this.defaultPreset
       const spec = this.resolve(name)
       session.append('permission/preset', { preset: name })
-      setSandboxMode(session, spec.sandbox)
+      setExecutionProfile(session, spec.executionProfile)
+      if (spec.sandbox !== undefined) setSandboxMode(session, spec.sandbox)
       setApprovalPolicy(session, spec.approval)
       return
     }
@@ -420,7 +496,10 @@ export class PermissionPresetService extends Service {
     if (selected === null && effective !== CUSTOM_PRESET) {
       session.append('permission/preset', { preset: effective })
     }
-    if (sandbox === null) {
+    if (state.executionProfile === null && effective !== CUSTOM_PRESET) {
+      setExecutionProfile(session, this.resolve(effective).executionProfile)
+    }
+    if (sandbox === null && this.executionProfileOf(state) !== DEVELOPER_HOST_ACCESS_PROFILE) {
       setSandboxMode(session, this.ctx.shell.sandboxMode as SandboxMode)
     }
     if (approval === null) {
