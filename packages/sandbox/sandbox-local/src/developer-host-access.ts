@@ -130,8 +130,11 @@ export class LocalDeveloperHostAccessProvider extends DeveloperHostAccessProvide
    * @returns unchanged argv and the actual capability report.
    */
   override launch(argv: readonly string[], policy: DeveloperHostAccessPolicy): DeveloperHostAccessArgv {
-    if (policy.profile !== DEVELOPER_HOST_ACCESS_PROFILE) {
-      throw new DeveloperHostAccessUnavailableError(`unsupported profile "${policy.profile}"`)
+    // Runtime guard against type-system bypass; both sides are 'developer-host-access' as const.
+    const profile = policy.profile
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- defensive runtime check
+    if (profile !== DEVELOPER_HOST_ACCESS_PROFILE) {
+      throw new DeveloperHostAccessUnavailableError(`unsupported profile "${String(profile)}"`)
     }
     const capabilities = this.capabilities(
       policy.sessionId === undefined
