@@ -136,7 +136,28 @@ describe('PiAiAdapter provider routing', () => {
       messages: [],
       sessionId: 'session-user-42' as never,
     })
-    expect(server.headers[0]?.['x-opencode-session']).toBe('session-user-42')
+    expect(server.headers[0]?.['x-dsh-session-id']).toBe('session-user-42')
+    expect(server.headers[0]?.['x-opencode-session']).toBeUndefined()
+  })
+
+  it('marks auxiliary Atlas requests without exposing purpose in the model body', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, {
+      api: 'openai-completions',
+      models: [{ id: 'atlas-test-model', name: 'Atlas test model', contextWindow: 4096 }],
+    }, 'atlas')
+    await assemble(ctx, {
+      provider: 'atlas',
+      model: 'atlas-test-model',
+      messages: [],
+      sessionId: 'session-title-42' as never,
+      purpose: 'session-title',
+      workspacePath: '/home/baustin27/Projects/PPC',
+    })
+    expect(server.headers[0]?.['x-dsh-request-purpose']).toBe('session-title')
+    expect(server.headers[0]?.['x-dsh-workspace-path']).toBe('/home/baustin27/Projects/PPC')
+    expect(server.requests[0]).not.toHaveProperty('purpose')
+    expect(server.requests[0]).not.toHaveProperty('workspacePath')
   })
 
   it('refreshes Atlas automatic alias capacity from the live model directory', async () => {
@@ -248,6 +269,23 @@ describe('PiAiAdapter provider routing', () => {
     await expect(ctx.llm.resolveModelInfo('atlas', 'new-live-model')).resolves.toMatchObject({
       context: { contextWindow: 262_144 },
     })
+  })
+
+  it('bounds Atlas tool turns and uses deterministic sampling defaults', async () => {
+    expect(resolveProfiles({ atlas: { api: 'openai-completions', baseURL: 'https://atlas.test/v1', models: [{ id: 'atlas-test-model' }] } }).get('atlas'))
+      .toMatchObject({ toolCallMaxTokens: 4096, toolCallTemperature: 0 })
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, {
+      toolCallMaxTokens: 4096,
+      toolCallTemperature: 0,
+    })
+    const result = await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      tools: [{ name: 'bash', description: 'Run a command.', parameters: { type: 'object' } }],
+      maxTokens: 32_768,
+    })
+    expect(server.requests[0], JSON.stringify(result.finish)).toMatchObject({ temperature: 0, max_tokens: 4096 })
   })
 
   it('forwards common stream options and profile reasoning', async () => {

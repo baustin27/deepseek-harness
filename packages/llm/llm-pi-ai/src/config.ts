@@ -151,6 +151,10 @@ export interface PiAiProviderProfile {
   headers?: Record<string, string>
   /** Provider-neutral pi-ai reasoning level. */
   reasoning?: ModelThinkingLevel
+  /** Maximum output tokens for tool-calling turns; defaults to 4096 on Atlas routes. */
+  toolCallMaxTokens?: number
+  /** Sampling temperature for tool-calling turns; defaults to 0 on Atlas routes. */
+  toolCallTemperature?: number
   /** Token budgets used by reasoning providers that support them. */
   thinkingBudgets?: ThinkingBudgets
   /** Prompt-cache retention preference. */
@@ -332,6 +336,8 @@ const profile = z.object({
   defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
   headers: z.dict(z.string()),
   reasoning: z.union(THINKING_LEVELS),
+  toolCallMaxTokens: z.number().step(1).min(1),
+  toolCallTemperature: z.number().min(0).max(2),
   thinkingBudgets,
   cacheRetention: z.union(['none', 'short', 'long']),
   transport: z.union(['sse', 'websocket', 'websocket-cached', 'auto']),
@@ -489,6 +495,8 @@ export function resolveProfiles(
     const { apiKeyEnv, retryPolicy, models: _models, displayName: _displayName, ...rest } = source
     resolved.set(provider, {
       ...rest,
+      ...source.toolCallMaxTokens === undefined && provider === 'atlas' ? { toolCallMaxTokens: 4096 } : {},
+      ...source.toolCallTemperature === undefined && provider === 'atlas' ? { toolCallTemperature: 0 } : {},
       provider,
       displayName,
       ...apiKeyEnv === undefined ? {} : { apiKeyEnv: credentialRef(apiKeyEnv) },

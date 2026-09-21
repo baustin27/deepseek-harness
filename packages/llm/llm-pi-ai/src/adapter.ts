@@ -127,6 +127,7 @@ function profileOptions(
   profile: ResolvedPiAiProviderProfile,
   reasoning: ModelThinkingLevel | undefined,
   apiKey: string | undefined,
+  toolCall: boolean,
 ): SimpleStreamOptions {
   const enabledReasoning: ThinkingLevel | undefined = reasoning === 'off' ? undefined : reasoning
   return {
@@ -137,6 +138,8 @@ function profileOptions(
     ...profile.transport === undefined ? {} : { transport: profile.transport },
     ...profile.timeoutMs === undefined ? {} : { timeoutMs: profile.timeoutMs },
     ...profile.websocketConnectTimeoutMs === undefined ? {} : { websocketConnectTimeoutMs: profile.websocketConnectTimeoutMs },
+    ...toolCall && profile.toolCallMaxTokens === undefined ? {} : toolCall ? { maxTokens: profile.toolCallMaxTokens } : {},
+    ...toolCall && profile.toolCallTemperature === undefined ? {} : toolCall ? { temperature: profile.toolCallTemperature } : {},
     // The agent recovery layer owns visible attempts; one adapter call is one SDK attempt.
     maxRetries: 0,
   }
@@ -229,11 +232,11 @@ function requestHeaders(
     // Correlates a Harness stream with Atlas edge:request and hop telemetry.
     // This is transport metadata only; it never reaches the model context.
     'x-dsh-request-id': requestId,
-    // The Atlas route is OpenCode-compatible. DSH owns the conversation
-    // session, so carry that identity across the generic pi-ai boundary;
-    // other providers must not receive OpenCode-specific headers.
+    // Atlas uses this only at the private DSH→sandbox boundary. It is not an
+    // OpenCode/provider identity header and the keyless adapter scrubs all
+    // transport metadata before forwarding to an upstream model provider.
     ...(['atlas', 'atlas-sandbox'] as const).includes(provider as 'atlas' | 'atlas-sandbox') && sessionId !== undefined
-      ? { 'x-opencode-session': sessionId }
+      ? { 'x-dsh-session-id': sessionId }
       : {},
     ...(['atlas', 'atlas-sandbox'] as const).includes(provider as 'atlas' | 'atlas-sandbox') && purpose !== undefined
       ? { 'x-dsh-request-purpose': purpose }
@@ -552,9 +555,15 @@ export class PiAiAdapter extends LlmAdapter {
           },
         }, onReplayDegrade)
       const events = snapshot.models.streamSimple(model, context, {
-        ...profileOptions(profile, reasoning, apiKey),
+        ...profileOptions(profile, reasoning, apiKey, (options.tools?.length ?? 0) > 0),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
-        ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
+        ...options.maxTokens === undefined
+          ? {}
+          : {
+            maxTokens: (options.tools?.length ?? 0) > 0 && profile.toolCallMaxTokens !== undefined
+              ? Math.min(options.maxTokens, profile.toolCallMaxTokens)
+              : options.maxTokens,
+          },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
         signal: streamSignal,
         // Profile headers are deployment-owned; attribution names are
