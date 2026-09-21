@@ -70,7 +70,9 @@ async function setup(
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(FakeSandboxProvider)
   await ctx.plugin(SandboxPolicyService, {
-    ...mode !== undefined ? { mode } : {},
+    // The production composition defaults to host access; these legacy
+    // confinement tests opt down explicitly unless a case selects another mode.
+    mode: mode ?? 'read-only',
     ...workspaceRoot !== undefined ? { workspaceRoot } : {},
   })
   await ctx.plugin(LocalSubprocessRuntime)
