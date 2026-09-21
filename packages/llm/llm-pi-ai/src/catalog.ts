@@ -622,6 +622,11 @@ export interface RouteCatalogRequest {
  * catalog's pricing metadata instead of guessing from model names.
  */
 export function isFreeModel(model: Model<Api>): boolean {
+  // `auto` and `openrouter/fusion` are routing aliases, not free model
+  // guarantees. They carry zero catalog cost because their eventual target is
+  // unknown; exposing either on a free-only route could still select paid
+  // capacity. `openrouter/free` is the explicit provider free-model router.
+  if (model.id === 'auto' || model.id === 'openrouter/fusion') return false
   return model.cost.input === 0
     && model.cost.output === 0
     && model.cost.cacheRead === 0

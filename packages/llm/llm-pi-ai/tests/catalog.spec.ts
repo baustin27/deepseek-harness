@@ -407,6 +407,8 @@ describe('free-only provider routes', () => {
     expect(models.length).toBeGreaterThan(0)
     expect(models.every(isFreeModel)).toBe(true)
     expect(models.some(model => model.id.endsWith(':free'))).toBe(true)
+    expect(models.some(model => model.id === 'openrouter/free')).toBe(true)
+    expect(models.some(model => model.id === 'auto' || model.id === 'openrouter/fusion')).toBe(false)
     expect(models.some(model => model.id === 'ai21/jamba-large-1.7')).toBe(false)
   })
 })
