@@ -10,7 +10,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { ExecutionProfile, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
@@ -219,6 +219,8 @@ export function applyChildComposition(
 
 /** Policy seeded onto a child session's log at the delegation boundary. */
 export interface DelegatedPolicyOverrides {
+  /** The parent session's explicit execution-profile override, or `undefined` without one. */
+  readonly executionProfile: ExecutionProfile | undefined
   /** The parent session's explicit sandbox-mode override, or `undefined` without one. */
   readonly sandboxMode: SandboxMode | undefined
   /**
@@ -233,15 +235,17 @@ export interface DelegatedPolicyOverrides {
  * Capture the policy to seed into one delegation. Call synchronously before
  * the child start's first await: a later parent switch belongs to the
  * parent's future, not to this child. Only the parent session's explicit
- * sandbox override is captured — never deployment defaults or one-shot
+ * execution-profile and sandbox overrides are captured — never deployment defaults or one-shot
  * grants — and the approval policy is pinned to `'never'` regardless of the
  * parent's own policy.
  * @param parent - the delegating parent agent.
- * @returns the sandbox override (or `undefined` without one) and the approval pin.
+ * @returns the execution-profile/sandbox overrides (or `undefined` without one) and the approval pin.
  */
 export function captureDelegatedPolicyOverrides(parent: Agent): DelegatedPolicyOverrides {
+  const policy = parent.ctx.get('sandboxPolicy')
   return {
-    sandboxMode: parent.ctx.get('sandboxPolicy')?.overrideOf(parent.session),
+    executionProfile: policy?.profileOf(parent.session),
+    sandboxMode: policy?.overrideOf(parent.session),
     approvalPolicy: parent.ctx.get('approval') === undefined ? undefined : 'never',
   }
 }
@@ -259,6 +263,9 @@ export function appendDelegatedPolicyOverrides(
   childSession: Session,
   overrides: DelegatedPolicyOverrides,
 ): void {
+  if (overrides.executionProfile !== undefined) {
+    childSession.append('execution/profile', { profile: overrides.executionProfile, source: 'delegation' })
+  }
   if (overrides.sandboxMode !== undefined) {
     childSession.append('sandbox/mode', { mode: overrides.sandboxMode, source: 'delegation' })
   }
