@@ -332,6 +332,36 @@ export function apply(ctx: Context, config: Config): void {
   }
   ensureRegistrationFacts()
 
+  // Atlas keeps one stable DSH route while its local lanes can load, unload,
+  // or swap models independently. Poll the live directory and publish the
+  // normal topology event only when the model/capacity snapshot changes; the
+  // model selector already listens for this event and refreshes its catalog.
+  let atlasCatalogSignature: string | undefined
+  let atlasCatalogPoll: Promise<void> | undefined
+  const pollAtlasCatalog = async (): Promise<void> => {
+    if (!profiles().has('atlas') || atlasCatalogPoll !== undefined) return
+    atlasCatalogPoll = (async () => {
+      try {
+        const models = await adapter.listModels('atlas')
+        const signature = JSON.stringify(models
+          .map(model => ({ id: model.id, name: model.name, inputModalities: model.inputModalities }))
+          .sort((left, right) => left.id.localeCompare(right.id)))
+        if (atlasCatalogSignature !== undefined && atlasCatalogSignature !== signature) {
+          ctx.emit('llm/adapters-updated')
+        }
+        atlasCatalogSignature = signature
+      } catch {
+        // A transient Atlas restart must not invalidate the last good DSH
+        // catalog. The next interval retries the live directory.
+      }
+    })().finally(() => { atlasCatalogPoll = undefined })
+    await atlasCatalogPoll
+  }
+  const atlasCatalogTimer = setInterval(() => { void pollAtlasCatalog() }, 15_000)
+  atlasCatalogTimer.unref?.()
+  ctx.effect(() => () => clearInterval(atlasCatalogTimer), 'llm-pi-ai: Atlas catalog polling')
+  void pollAtlasCatalog()
+
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       // Refuse an unserviceable section where it is written: without this a
