@@ -203,6 +203,7 @@ describe('PermissionPresetService', () => {
     ctx.permissionPresets.set(session, 'danger-full-access')
     const tail = session.snapshotEvents().slice(4)
     expect(tail.map(e => [e.type, e.data])).toEqual([
+      ['sandbox/mode', { mode: 'read-only' }],
       ['permission/preset', { preset: 'danger-full-access' }],
       ['sandbox/mode', { mode: 'danger-full-access' }],
     ])
@@ -228,8 +229,13 @@ describe('PermissionPresetService', () => {
   })
 
   it('requires an explicit default when composition defaults match no preset', async () => {
-    await expect(mounted({ approvalDefault: 'never' }))
-      .rejects.toThrow(/configure defaultPreset explicitly/)
+    let failure: unknown
+    try {
+      await mounted({ approvalDefault: 'never', config: { presets: TEST_PRESETS } })
+    } catch (error) {
+      failure = error
+    }
+    expect(String(failure)).toContain('configure defaultPreset explicitly')
   })
 
   it('reads a schema-less approval stand-in as the ask default', async () => {
@@ -247,6 +253,7 @@ describe('new-session default', () => {
     const first = ctx.sessions.create(SessionId('first'))
     expect(first.snapshotEvents().map(event => [event.type, event.data])).toEqual([
       ['permission/preset', { preset: 'workspace-write' }],
+      ['execution/profile', { profile: 'workspace-write' }],
       ['sandbox/mode', { mode: 'workspace-write' }],
       ['approval/policy', { policy: 'ask' }],
     ])
@@ -286,7 +293,7 @@ describe('new-session default', () => {
     const resumed = ctx.sessions.create(SessionId('empty-resumed'), { seed: [] })
     expect(ctx.permissionPresets.current(resumed)).toBe('workspace-write')
     expect(resumed.snapshotEvents().map(event => event.type)).toEqual([
-      'session/end-seed', 'permission/preset', 'sandbox/mode', 'approval/policy',
+      'session/end-seed', 'permission/preset', 'execution/profile', 'sandbox/mode', 'approval/policy',
     ])
   })
 
