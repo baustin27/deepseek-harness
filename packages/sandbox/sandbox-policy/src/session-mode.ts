@@ -19,7 +19,11 @@
  */
 
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import {
+  DEVELOPER_HOST_ACCESS_PROFILE,
+  type ExecutionProfile,
+  type SandboxMode,
+} from '@deepseek-ai/dsh-sandbox'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -35,11 +39,24 @@ declare module '@deepseek-ai/dsh-session/types' {
       /** Marks an override seeded into a child at delegation. */
       source?: 'delegation'
     }
+    /**
+     * The session's execution profile was switched. This event is log-only,
+     * durable, and replayable; it carries no argv, environment, or attachment
+     * data. `source: 'delegation'` identifies a child profile inherited at fork.
+     */
+    'execution/profile': {
+      profile: ExecutionProfile
+      /** Marks a profile seeded into a child at delegation. */
+      source?: 'delegation'
+    }
   }
 }
 
 /** Every {@link SandboxMode}, for option advertisement and runtime validation of untrusted mode strings. */
 export const SANDBOX_MODES: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access']
+
+/** Every execution profile, with host access listed first as the default. */
+export const EXECUTION_PROFILES: readonly ExecutionProfile[] = [DEVELOPER_HOST_ACCESS_PROFILE, ...SANDBOX_MODES]
 
 /**
  * THE write path for a session's sandbox-mode override: appends exactly one
@@ -52,4 +69,15 @@ export const SANDBOX_MODES: readonly SandboxMode[] = ['read-only', 'workspace-wr
  */
 export function setSandboxMode(session: Session, mode: SandboxMode): void {
   session.append('sandbox/mode', { mode })
+}
+
+/**
+ * THE write path for a session execution-profile override. The profile event
+ * is the only mutable session state; consumers fold it at each operation
+ * boundary. Sandbox modes remain explicit opt-down profiles.
+ * @param session - the session whose execution profile changes.
+ * @param profile - host access or one explicit sandbox mode.
+ */
+export function setExecutionProfile(session: Session, profile: ExecutionProfile): void {
+  session.append('execution/profile', { profile })
 }

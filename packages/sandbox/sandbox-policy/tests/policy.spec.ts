@@ -11,11 +11,17 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
-import SandboxPolicyService, { SANDBOX_MODES, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
+import SandboxPolicyService, {
+  DEFAULT_EXECUTION_PROFILE,
+  EXECUTION_PROFILES,
+  SANDBOX_MODES,
+  setExecutionProfile,
+  setSandboxMode,
+} from '@deepseek-ai/dsh-sandbox-policy'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt, { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
-async function mounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}) {
+async function mounted(config: { executionProfile?: 'developer-host-access' | 'read-only' | 'workspace-write' | 'danger-full-access'; mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}) {
   const ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, config)
@@ -43,10 +49,15 @@ async function policyContext(ctx: Context, activeSession: Session): Promise<stri
 }
 
 describe('SandboxPolicyService', () => {
-  it('defaults to read-only under the process cwd', async () => {
+  it('defaults to developer host access under the process cwd', async () => {
     const ctx = await mounted()
-    expect(ctx.sandboxPolicy.defaultMode).toBe('read-only')
-    expect(ctx.sandboxPolicy.workspaceRoot).toBe(resolve(process.cwd()))
+    expect(ctx.sandboxPolicy.defaultProfile).toBe(DEFAULT_EXECUTION_PROFILE)
+    expect(ctx.sandboxPolicy.defaultMode).toBeUndefined()
+    expect(ctx.sandboxPolicy.resolve()).toMatchObject({
+      profile: 'developer-host-access',
+      cwd: resolve(process.cwd()),
+      roots: ['/'],
+    })
   })
 
   it('carries a configured mode and resolves the workspace root absolute', async () => {
@@ -121,9 +132,14 @@ describe('SandboxPolicyService', () => {
     })
   })
 
-  it('uses the configured root when a session has no cwd', async () => {
+  it('uses the configured cwd when a session has no cwd', async () => {
     const ctx = await mounted({ workspaceRoot: '/fallback' })
-    expect(ctx.sandboxPolicy.resolve({ session: session('sess-no-cwd') }).workspaceRoot).toBe(resolve('/fallback'))
+    expect(ctx.sandboxPolicy.resolve({ session: session('sess-no-cwd') })).toMatchObject({
+      profile: 'developer-host-access',
+      cwd: resolve('/fallback'),
+      roots: ['/'],
+      sessionId: 'sess-no-cwd',
+    })
   })
 
   it('rejects a mode outside the closed vocabulary at load', async () => {
@@ -141,7 +157,7 @@ describe('SandboxPolicyService', () => {
     await ctx.plugin(SessionProjectionRegistry)
     const fiber = await ctx.plugin(SandboxPolicyService, {})
     expect(ctx.sandboxPolicy).toBeDefined()
-    expect(await policyContext(ctx, session('sess-hmr'))).toContain('read-only')
+    expect(await policyContext(ctx, session('sess-hmr'))).toContain('developer-host-access')
     await fiber.dispose()
     expect(ctx.get('sandboxPolicy')).toBeUndefined()
     expect((await ctx.systemPrompt.assemble()).contexts.find(context => context.name === 'sandbox:policy')).toBeUndefined()
@@ -149,7 +165,7 @@ describe('SandboxPolicyService', () => {
 })
 
 describe('sandbox:policy request context', () => {
-  async function promptMounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}): Promise<Context> {
+  async function promptMounted(config: { executionProfile?: 'developer-host-access' | 'read-only' | 'workspace-write' | 'danger-full-access'; mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}): Promise<Context> {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(SessionProjectionRegistry)
@@ -220,6 +236,11 @@ describe('the sandbox/mode session kit', () => {
     expect(SANDBOX_MODES).toEqual(['read-only', 'workspace-write', 'danger-full-access'])
   })
 
+  it('execution profiles list host access first and preserve sandbox opt-downs', () => {
+    expect(DEFAULT_EXECUTION_PROFILE).toBe('developer-host-access')
+    expect(EXECUTION_PROFILES).toEqual(['developer-host-access', ...SANDBOX_MODES])
+  })
+
   it('the sandboxMode projection folds to the last switch, or null without one', async () => {
     const ctx = await mounted()
     const session = Session.create(SessionId('sess-fold'))
@@ -235,5 +256,15 @@ describe('the sandbox/mode session kit', () => {
     const modeEvents = session.snapshotEvents().filter(e => e.type === 'sandbox/mode')
     expect(modeEvents).toHaveLength(1)
     expect(modeEvents[0]?.data).toEqual({ mode: 'danger-full-access' })
+  })
+
+  it('execution profile projection folds and writes the host profile without secrets', async () => {
+    const ctx = await mounted()
+    const active = Session.create(SessionId('sess-profile'))
+    expect(ctx.sessionProjections.stateOf(active, 'executionProfile')).toBeNull()
+    setExecutionProfile(active, 'developer-host-access')
+    expect(ctx.sandboxPolicy.profileOf(active)).toBe('developer-host-access')
+    expect(active.snapshotEvents().at(-1)?.data).toEqual({ profile: 'developer-host-access' })
+    expect(JSON.stringify(active.snapshotEvents().at(-1))).not.toMatch(/argv|env|attachment|secret/i)
   })
 })

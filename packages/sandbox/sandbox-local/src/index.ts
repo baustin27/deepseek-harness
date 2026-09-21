@@ -40,6 +40,15 @@ import { AclWriteGrant, assertTempRootOutsideWorkspace, tempWriteSid, workspaceW
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
 
+export {
+  DEVELOPER_HOST_ACCESS_CAPABILITIES,
+  LocalDeveloperHostAccessProvider,
+  hostAccessCapabilities,
+  resolveHostAccessCwd,
+  resolveHostAccessRoot,
+} from './developer-host-access.ts'
+export type { DeveloperHostAccessConfig, DeveloperHostAccessInternals } from './developer-host-access.ts'
+
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
   /**

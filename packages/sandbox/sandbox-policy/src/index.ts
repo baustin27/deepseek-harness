@@ -20,35 +20,69 @@
  * @module @deepseek-ai/dsh-sandbox-policy
  */
 
-import { resolve as resolvePath } from 'node:path'
+import { parse, resolve as resolvePath } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { z as zod } from 'zod'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent'
-import { canonicalPath, type SandboxExecutionPolicy, type SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import type { Session } from '@deepseek-ai/dsh-session'
+import {
+  DEVELOPER_HOST_ACCESS_PROFILE,
+  type DeveloperHostAccessPolicy,
+  type ExecutionPolicy,
+  type ExecutionProfile,
+  canonicalPath,
+  type SandboxExecutionPolicy,
+  type SandboxMode,
+} from '@deepseek-ai/dsh-sandbox'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 
-export { SANDBOX_MODES, setSandboxMode } from './session-mode.ts'
+export {
+  EXECUTION_PROFILES,
+  SANDBOX_MODES,
+  setExecutionProfile,
+  setSandboxMode,
+} from './session-mode.ts'
 
 /** Resolve filesystem identity before lexical normalization can erase symlink-sensitive components. */
 function resolveWorkspaceRoot(path: string): string {
   return resolvePath(canonicalPath(path))
 }
 
+/** Resolve the complete host filesystem root for a canonical cwd. */
+function resolveHostRoot(cwd: string): string {
+  const root = parse(cwd).root
+  return canonicalPath(root.length === 0 ? cwd : root)
+}
+
+/** Resolve host access policy facts without mounting attachments or changing roots. */
+function hostPolicy(cwd: string, sessionId?: SessionId): DeveloperHostAccessPolicy {
+  const resolvedCwd = resolveWorkspaceRoot(cwd)
+  return {
+    profile: DEVELOPER_HOST_ACCESS_PROFILE,
+    cwd: resolvedCwd,
+    roots: [resolveHostRoot(resolvedCwd)],
+    ...sessionId === undefined ? {} : { sessionId },
+  }
+}
+
 /** Render the policy without claiming which capabilities are mounted. */
-function renderPolicyContext(policy: SandboxExecutionPolicy): string {
-  switch (policy.mode) {
+function renderPolicyContext(policy: ExecutionPolicy): string {
+  if ('profile' in policy) {
+    return `Current DSH execution profile: developer-host-access. Child processes run directly in the current OS account and container with host filesystem root ${JSON.stringify(policy.roots[0])}; network and process visibility are inherited from the host. Attachments remain immutable and are not mounted.`
+  }
+  const sandboxPolicy: SandboxExecutionPolicy = policy
+  switch (sandboxPolicy.mode) {
     case 'read-only':
       return 'Current DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.'
     case 'workspace-write':
-      return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`
+      return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(sandboxPolicy.workspaceRoot)}. Some platform temporary areas may also be writable.`
     case 'danger-full-access':
       return 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.'
     /* v8 ignore next 4 -- SandboxMode is a typed same-process closed union; this branch is only the static exhaustiveness guard. */
     default: {
-      const mode: never = policy.mode
+      const mode: never = sandboxPolicy.mode
       throw new Error(`unreachable sandbox mode: ${String(mode)}`)
     }
   }
@@ -68,7 +102,9 @@ declare module '@deepseek-ai/cordis' {
  * is any per-family knob: this is the one shared policy home.
  */
 export interface Config {
-  /** File-sandbox mode a session starts from (default: `read-only`). */
+  /** Default execution profile; host access is used when omitted. */
+  executionProfile?: ExecutionProfile
+  /** Legacy explicit sandbox opt-down; equivalent to `executionProfile` when set. */
   mode?: SandboxMode
   /**
    * Fallback root for agentless calls and sessions without a cwd (default:
@@ -77,12 +113,14 @@ export interface Config {
   workspaceRoot?: string
 }
 
-/** Inputs that select the sandbox policy for one capability call. */
+/** Inputs that select the execution policy for one capability call. */
 export interface SandboxPolicyRequest {
-  /** Calling session; its immutable cwd becomes the workspace boundary. */
+  /** Calling session; its immutable cwd becomes the execution root. */
   session?: Session
-  /** Explicit approved mode override, which outranks session policy. */
+  /** Explicit approved sandbox mode override, which outranks profile state. */
   mode?: SandboxMode
+  /** Explicit profile override, which outranks the session profile state. */
+  profile?: ExecutionProfile
 }
 
 /** The sandbox-mode projection's state schema (state equals the public shape). */
@@ -93,10 +131,22 @@ const sandboxModeStateSchema = zod.union([
 ]).nullable()
 
 type SandboxModeState = zod.infer<typeof sandboxModeStateSchema>
+const executionProfileStateSchema = zod.union([
+  zod.literal(DEVELOPER_HOST_ACCESS_PROFILE),
+  zod.literal('read-only'),
+  zod.literal('workspace-write'),
+  zod.literal('danger-full-access'),
+]).nullable()
+
+/** Session profile state before the deployment default is applied. */
+export type ExecutionProfileState = zod.infer<typeof executionProfileStateSchema>
+
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
     /** Last logged sandbox-mode override, or null before one (deployment default applies at resolve time). */
     sandboxMode: SandboxModeState
+    /** Last logged execution-profile override, or null before one (deployment default applies at resolve time). */
+    executionProfile: ExecutionProfileState
   }
 }
 
@@ -106,10 +156,14 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
  * section. Tool layers call {@link resolve} for each execution so a session's
  * mode log and immutable cwd travel together to every enforcing capability.
  */
+/** Default profile for every new session and deployment. */
+export const DEFAULT_EXECUTION_PROFILE: ExecutionProfile = DEVELOPER_HOST_ACCESS_PROFILE
+
 export class SandboxPolicyService extends Service {
   // Inline schema call: the config catalog walks `static Config` statically.
   static Config: z<Config> = z.object({
-    mode: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const).default('read-only'),
+    executionProfile: z.union(['developer-host-access', 'read-only', 'workspace-write', 'danger-full-access'] as const).default('developer-host-access'),
+    mode: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const),
     // No schema default: process.cwd() is resolved in the constructor so the
     // stored root is always absolute regardless of how it was supplied.
     workspaceRoot: z.string(),
@@ -117,16 +171,18 @@ export class SandboxPolicyService extends Service {
 
   static inject = ['sessionProjections']
 
-  /** The deployment default mode — the fallback beneath a session override. */
-  readonly defaultMode: SandboxMode
+  /** The deployment default profile — host access unless explicitly opted down. */
+  readonly defaultProfile: ExecutionProfile
+  /** The deployment default sandbox mode, when the profile is a sandbox opt-down. */
+  readonly defaultMode: SandboxMode | undefined
   /** The absolute `workspace-write` fallback root for calls without a session cwd. */
   readonly workspaceRoot: string
   constructor(ctx: Context, config: Config) {
     super(ctx, 'sandboxPolicy')
-    // schemastery (static Config) already filled `mode`; the cast records that
-    // runtime fact. `workspaceRoot` has NO schema default, so its fallback to
-    // the process cwd is real branching, resolved absolute either way.
-    this.defaultMode = config.mode as SandboxMode
+    // An explicit legacy mode remains an opt-down. Otherwise host access is
+    // the default for new sessions and deployments.
+    this.defaultProfile = config.mode ?? config.executionProfile ?? DEFAULT_EXECUTION_PROFILE
+    this.defaultMode = this.defaultProfile === DEVELOPER_HOST_ACCESS_PROFILE ? undefined : this.defaultProfile
     this.workspaceRoot = resolveWorkspaceRoot(config.workspaceRoot ?? process.cwd())
 
     ctx.sessionProjections.register({
@@ -135,6 +191,13 @@ export class SandboxPolicyService extends Service {
       stateSchema: sandboxModeStateSchema,
       init: () => null,
       apply: (state, event) => (event.type === 'sandbox/mode' ? event.data.mode : state),
+    })
+    ctx.sessionProjections.register({
+      key: 'executionProfile',
+      stateVersion: 1,
+      stateSchema: executionProfileStateSchema,
+      init: () => null,
+      apply: (state, event) => (event.type === 'execution/profile' ? event.data.profile : state),
     })
 
     ctx.inject(['systemPrompt'], (scope: Context) => {
@@ -152,30 +215,45 @@ export class SandboxPolicyService extends Service {
   }
 
   /**
-   * Resolve the complete policy for one capability call. An approved explicit
-   * mode outranks the session's last `sandbox/mode` event, which outranks the
-   * deployment default. A session cwd is its workspace-write boundary; the
-   * configured root is the fallback for agentless calls and sessions without a
-   * cwd.
-   * @param request - optional session and approved mode override.
-   * @returns the fully resolved per-call mode and absolute workspace root.
+   * Resolve the complete policy for one capability call. An explicit mode or
+   * profile outranks the session profile event, which outranks the deployment
+   * default. A session cwd is the policy cwd; the configured root is the
+   * fallback for agentless calls and sessions without a cwd.
+   * @param request - optional session and approved profile override.
+   * @returns a host-access policy or a sandbox file-effect policy.
    */
-  resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy {
+  resolve(request: SandboxPolicyRequest = {}): ExecutionPolicy {
     const { session } = request
+    const profile = request.mode
+      ?? request.profile
+      ?? (session === undefined ? undefined : this.profileOf(session))
+      ?? (session === undefined ? undefined : this.overrideOf(session))
+      ?? this.defaultProfile
+    const cwd = resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)
+    if (profile === DEVELOPER_HOST_ACCESS_PROFILE) return hostPolicy(cwd, session?.id)
     return {
-      mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
-      workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot),
+      mode: profile,
+      workspaceRoot: cwd,
       ...session === undefined ? {} : { sessionId: session.id },
     }
   }
 
   /**
-   * Read the session override without applying the deployment default.
+   * Read the session sandbox-mode override without applying a default.
    * @param session - session whose log supplies the override.
    * @returns the last logged mode, or `undefined` without one.
    */
   overrideOf(session: Session): SandboxMode | undefined {
     return this.ctx.sessionProjections.stateOf(session, 'sandboxMode') ?? undefined
+  }
+
+  /**
+   * Read the session execution-profile override without applying a default.
+   * @param session - session whose log supplies the override.
+   * @returns the last logged profile, or `undefined` without one.
+   */
+  profileOf(session: Session): ExecutionProfile | undefined {
+    return this.ctx.sessionProjections.stateOf(session, 'executionProfile') ?? undefined
   }
 }
 
