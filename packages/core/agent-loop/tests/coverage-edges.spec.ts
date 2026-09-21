@@ -103,6 +103,40 @@ describe('tool JSON parse', () => {
 
     expect(agent.session.snapshotEvents().some(e => e.type === 'tool/result')).toBe(true)
   })
+
+  it('rejects missing required tool-call fields before invoking the tool body', async () => {
+    let executions = 0
+    const adapter = new MockAdapter([
+      [
+        { type: 'block-start' as const, index: 0, blockType: 'tool-call' as const },
+        { type: 'block-end' as const, index: 0, block: { type: 'tool-call' as const, id: ToolCallId('c1'), name: 'required', arguments: '{"command":"pwd"}' } },
+        { type: 'finish' as const, reason: { kind: 'tool-calls' as const } },
+      ] satisfies StreamChunk[],
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter)
+    ctx.tools.register(defineContentToolFixture({
+      name: 'required',
+      description: 'requires command metadata',
+      parameters: {
+        command: { type: 'string', required: true },
+        description: { type: 'string', required: true },
+      },
+      async execute() {
+        executions += 1
+        return [{ type: 'text', text: 'must not run' }]
+      },
+    }))
+    const agent = await ctx.agentLoop.create(SessionId('required-args'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'use tool')
+    await waitForIdle(ctx, agent)
+
+    expect(executions).toBe(0)
+    const result = agent.session.snapshotEvents().find(e => e.type === 'tool/result')
+    expect(result?.type).toBe('tool/result')
+    expect(JSON.stringify(result)).toContain('missing required property \\"description\\"')
+  })
 })
 
 describe('thrown-value propagation', () => {
