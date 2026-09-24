@@ -603,6 +603,12 @@ interface GenerateOptions {
    * generation policy. Ordinary conversation requests leave it unset.
    */
   purpose?: 'compaction' | 'session-title'
+  /**
+   * Workspace directory the request belongs to. Adapters may map it to
+   * model-hidden transport metadata for workspace-aware routing. Ordinary
+   * requests leave it unset.
+   */
+  workspacePath?: string
 }
 ```
 

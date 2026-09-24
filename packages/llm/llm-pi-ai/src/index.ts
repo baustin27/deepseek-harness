@@ -362,6 +362,48 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => clearInterval(atlasCatalogTimer), 'llm-pi-ai: Atlas catalog polling')
   void pollAtlasCatalog()
 
+  // Dynamic catalog refresh: pi-ai providers that maintain their own directory
+  // refresh through the collection on boot and every 15 minutes, while static
+  // catalogs (Codex included) update through the installed package data. The
+  // normal topology event publishes only when the model snapshot changes; the
+  // model selector already listens for this event and refreshes its catalog. A
+  // failed poll keeps the last good DSH catalog and retries on the next tick.
+  // Atlas is excluded here: its live directory has its own poll above.
+  let dynamicCatalogSignature: string | undefined
+  let dynamicCatalogPoll: Promise<void> | undefined
+  const pollDynamicCatalogs = async (): Promise<void> => {
+    if (dynamicCatalogPoll !== undefined) return
+    dynamicCatalogPoll = (async () => {
+      try {
+        await adapter.refreshDynamicCatalogs()
+        const providers = [...profiles().keys()].filter(provider => provider !== 'atlas').sort()
+        const rows: { provider: string; models: { id: string; name: string; inputModalities: readonly string[] }[] }[] = []
+        for (const provider of providers) {
+          const models = await adapter.listModels(provider)
+          rows.push({
+            provider,
+            models: models
+              .map(model => ({ id: model.id, name: model.name, inputModalities: [...model.inputModalities ?? []] }))
+              .sort((left, right) => left.id.localeCompare(right.id)),
+          })
+        }
+        const signature = JSON.stringify(rows)
+        if (dynamicCatalogSignature !== undefined && dynamicCatalogSignature !== signature) {
+          ctx.emit('llm/adapters-updated')
+        }
+        dynamicCatalogSignature = signature
+      } catch {
+        // A failed refresh must not invalidate the last good DSH catalog. The
+        // next interval retries the live directory.
+      }
+    })().finally(() => { dynamicCatalogPoll = undefined })
+    await dynamicCatalogPoll
+  }
+  const dynamicCatalogTimer = setInterval(() => { void pollDynamicCatalogs() }, 15 * 60_000)
+  dynamicCatalogTimer.unref?.()
+  ctx.effect(() => () => clearInterval(dynamicCatalogTimer), 'llm-pi-ai: dynamic catalog polling')
+  void pollDynamicCatalogs()
+
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       // Refuse an unserviceable section where it is written: without this a

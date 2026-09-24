@@ -9,7 +9,7 @@ import FileSettingsProvider from '@deepseek-ai/dsh-settings-file'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
-import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
+import { createModels, getSupportedThinkingLevels, normalizeContext } from '@earendil-works/pi-ai'
 import type { Api, Model, OpenAICompletionsCompat, Provider } from '@earendil-works/pi-ai'
 import { resolveProfiles } from '../src/config.ts'
 import { isFreeModel } from '../src/catalog.ts'
@@ -320,16 +320,78 @@ describe('hand-declared providers', () => {
       // endpoint, and headers can carry, so a route naming one would be built
       // unable to authenticate.
       expect(supportedProtocols()).not.toContain(api)
-      expect(() => buildProvider({ provider: 'acme-gateway', displayName: 'Acme', api, models: [], namesCredential: true }))
+      expect(() => buildProvider({ provider: 'acme-gateway', displayName: 'Acme', api, models: [], namesCredential: true, catalogMode: 'allowlist', freeOnly: false, defaultContextWindow: 1024, defaultMaxTokens: 128, defaultInput: ['text'] }))
         .toThrow(/cannot serve; supported protocols are/)
     },
   )
 
   it('rejects a protocol this build cannot serve, and a route that names none', () => {
-    const spec = { provider: 'acme-gateway', displayName: 'Acme Gateway', models: [], namesCredential: true }
+    const spec = { provider: 'acme-gateway', displayName: 'Acme Gateway', models: [], namesCredential: true, catalogMode: 'allowlist' as const, freeOnly: false, defaultContextWindow: 1024, defaultMaxTokens: 128, defaultInput: ['text'] as const }
     expect(() => buildProvider({ ...spec, api: 'quantum-telepathy' }))
       .toThrow(/cannot serve; supported protocols are/)
     expect(() => buildProvider(spec)).toThrow(/cannot serve; supported protocols are/)
+  })
+
+  describe('catalog refresh', () => {
+    it('serves the installed codex catalog live, including package-data additions', () => {
+      const models = resolveProfiles({ 'openai-codex': {} }).get('openai-codex')?.piProvider.getModels() ?? []
+      expect(models.map(model => model.id)).toEqual(getBuiltinModels('openai-codex').map(model => model.id))
+      // pi-ai 0.87.1 additions: a stale pin hides these from the selector.
+      expect(models.map(model => model.id)).toEqual(expect.arrayContaining(['gpt-6-sol', 'gpt-6-luna']))
+    })
+
+    it('preserves pi-ai dynamic refresh hooks instead of dropping them', () => {
+      const dynamic = resolveProfiles({ radius: {} }).get('radius')?.piProvider
+      expect(typeof dynamic?.refreshModels).toBe('function')
+    })
+
+    it('delegates dynamic refresh to the catalog provider without network when offline', async () => {
+      const dynamic = resolveProfiles({ radius: {} }).get('radius')?.piProvider
+      const refresh = dynamic?.refreshModels
+      if (typeof refresh !== 'function') throw new Error('radius route lost its refresh hook')
+      // Offline refresh restores nothing and fetches nothing; the route keeps
+      // serving its materialization.
+      await refresh({
+        allowNetwork: false,
+        signal: new AbortController().signal,
+        publish: () => Promise.resolve(true),
+      } as never)
+      expect(dynamic?.getModels().length).toBeGreaterThan(0)
+    })
+
+    it('delegates credential-specific model availability to the catalog provider', () => {
+      const provider = resolveProfiles({ 'github-copilot': {} }).get('github-copilot')?.piProvider
+      const models = provider?.getModels() ?? []
+      expect(models.length).toBeGreaterThan(0)
+      // Without an OAuth grant the catalog filter is the identity.
+      expect(provider?.filterModels?.(models, undefined)).toBe(models)
+    })
+
+    it('leaves static catalog routes without a refresh hook', () => {
+      const provider = resolveProfiles({ 'openai-codex': {} }).get('openai-codex')?.piProvider
+      expect(provider?.refreshModels).toBeUndefined()
+    })
+
+    it('serves an explicit model list as a frozen allowlist', () => {
+      const models = resolveProfiles({ 'openai-codex': { models: [{ id: 'gpt-6-sol' }] } })
+        .get('openai-codex')?.piProvider.getModels() ?? []
+      expect(models.map(model => model.id)).toEqual(['gpt-6-sol'])
+    })
+
+    it('freezes snapshot routes carrying model overrides', () => {
+      const models = resolveProfiles({ 'openai-codex': { modelOverrides: { 'gpt-6-sol': { name: 'Custom Sol' } } } })
+        .get('openai-codex')?.piProvider.getModels() ?? []
+      expect(models.find(model => model.id === 'gpt-6-sol')?.name).toBe('Custom Sol')
+      expect(models.map(model => model.id)).toEqual(getBuiltinModels('openai-codex').map(model => model.id))
+    })
+
+    it('filters live free-only routes on every read', () => {
+      const models = resolveProfiles({ openrouter: { freeOnly: true } })
+        .get('openrouter')?.piProvider.getModels() ?? []
+      expect(models.length).toBeGreaterThan(0)
+      expect(models.every(isFreeModel)).toBe(true)
+      expect(models.length).toBeLessThan(getBuiltinModels('openrouter').length)
+    })
   })
 
   it('leaves an unauthenticated route to its protocol rather than inventing a credential', async () => {
@@ -521,7 +583,7 @@ describe('catalog routes with per-model configuration', () => {
     if (built === undefined) throw new Error('the deepseek route built no provider')
     const [model] = built.getModels()
     if (model === undefined) throw new Error('the deepseek route resolved no models')
-    const context = { messages: [{ role: 'user' as const, content: 'hi', timestamp: 0 }] }
+    const context = normalizeContext({ messages: [{ role: 'user' as const, content: 'hi', timestamp: 0 }] })
 
     // `stream` is interface-required and unused by the harness adapter, which
     // only calls `streamSimple`; both must still reach the catalog provider.
@@ -810,19 +872,19 @@ describe('compat switches', () => {
   })
 
   it('skips models of other protocols on a mixed route instead of failing them', () => {
-    // xai ships both completions and responses models, so a route-level switch
-    // must land on the former without invalidating the latter.
-    const catalog = getBuiltinModels('xai') as readonly Model<Api>[]
+    // fireworks ships both completions and anthropic-messages models, so a
+    // route-level switch must land on the former without invalidating the latter.
+    const catalog = getBuiltinModels('fireworks') as readonly Model<Api>[]
     const completions = catalog.find(model => model.api === 'openai-completions')
-    const responses = catalog.find(model => model.api === 'openai-responses')
-    if (completions === undefined || responses === undefined) throw new Error('xai no longer ships a mixed catalog')
+    const responses = catalog.find(model => model.api === 'anthropic-messages')
+    if (completions === undefined || responses === undefined) throw new Error('fireworks no longer ships a mixed catalog')
 
     const models = modelsOf({
-      xai: {
+      fireworks: {
         compat: { supportsReasoningEffort: false },
         models: [{ id: completions.id }, { id: responses.id }],
       },
-    }, 'xai')
+    }, 'fireworks')
 
     expect((models.get(completions.id)?.compat as OpenAICompletionsCompat).supportsReasoningEffort).toBe(false)
     expect(models.get(responses.id)?.compat).toEqual(responses.compat)
@@ -891,24 +953,24 @@ describe('compat switches', () => {
   })
 
   it('lands each route switch only on the models whose protocol declares it', () => {
-    const catalog = getBuiltinModels('xai') as readonly Model<Api>[]
+    const catalog = getBuiltinModels('fireworks') as readonly Model<Api>[]
     const completions = catalog.find(model => model.api === 'openai-completions')
-    const responses = catalog.find(model => model.api === 'openai-responses')
-    if (completions === undefined || responses === undefined) throw new Error('xai no longer ships a mixed catalog')
+    const responses = catalog.find(model => model.api === 'anthropic-messages')
+    if (completions === undefined || responses === undefined) throw new Error('fireworks no longer ships a mixed catalog')
 
     const models = modelsOf({
-      xai: {
+      fireworks: {
         // Both protocols take the first switch; only completions takes the second.
-        compat: { supportsDeveloperRole: false, thinkingFormat: 'openai' },
+        compat: { supportsLongCacheRetention: false, thinkingFormat: 'openai' },
         models: [{ id: completions.id }, { id: responses.id }],
       },
-    }, 'xai')
+    }, 'fireworks')
 
     const onCompletions = models.get(completions.id)?.compat as OpenAICompletionsCompat
-    expect(onCompletions.supportsDeveloperRole).toBe(false)
+    expect(onCompletions.supportsLongCacheRetention).toBe(false)
     expect(onCompletions.thinkingFormat).toBe('openai')
-    const onResponses = models.get(responses.id)?.compat as { supportsDeveloperRole?: boolean; thinkingFormat?: string }
-    expect(onResponses.supportsDeveloperRole).toBe(false)
+    const onResponses = models.get(responses.id)?.compat as { supportsLongCacheRetention?: boolean; thinkingFormat?: string }
+    expect(onResponses.supportsLongCacheRetention).toBe(false)
     expect(onResponses.thinkingFormat).toBeUndefined()
   })
 
@@ -1049,9 +1111,9 @@ describe('compat switches', () => {
   it('refuses a valueless compat key on a model entry too', () => {
     expect(() => resolveProfiles({
       deepseek: {
-        modelOverrides: { 'deepseek-v4-flash': { compat: { requiresReasoningContentOnAssistantMessages: null } } as never },
+        modelOverrides: { 'deepseek-flash': { compat: { requiresReasoningContentOnAssistantMessages: null } } as never },
       },
-    })).toThrow(/model "deepseek-v4-flash" sets compat "requiresReasoningContentOnAssistantMessages" with no value/)
+    })).toThrow(/model "deepseek-flash" sets compat "requiresReasoningContentOnAssistantMessages" with no value/)
   })
 
   it('serves the Responses compat type on every protocol pi-ai gives it to', () => {
@@ -1114,7 +1176,7 @@ describe('resolution snapshots', () => {
     const inFlight = (async () => {
       for await (const chunk of adapter.stream({
         provider: 'deepseek',
-        model: 'deepseek-v4-flash',
+        model: 'deepseek-flash',
         messages: [],
       })) chunks.push(chunk)
     })()
@@ -1143,7 +1205,7 @@ describe('resolution snapshots', () => {
     })
     const drain = async (): Promise<void> => {
       for await (const _chunk of adapter.stream({
-        provider: 'deepseek', model: 'deepseek-v4-flash', messages: [],
+        provider: 'deepseek', model: 'deepseek-flash', messages: [],
       })) { /* drain */ }
     }
 

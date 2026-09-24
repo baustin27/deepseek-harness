@@ -20,11 +20,12 @@
  */
 
 import { createProvider } from '@earendil-works/pi-ai'
-import type { Api, ApiKeyAuth, Model, Provider, ProviderStreams } from '@earendil-works/pi-ai'
+import type { Api, ApiKeyAuth, Credential, Model, Provider, ProviderStreams, RefreshModelsContext } from '@earendil-works/pi-ai'
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy'
-import { catalogProvider } from './catalog.ts'
+import { catalogProvider, isFreeModel, resolveRouteModels } from './catalog.ts'
+import type { PiAiCompatProfile, PiAiModality } from './catalog.ts'
 
 /**
  * Wire protocols a configured route may name, mapped to pi-ai's lazily loaded
@@ -97,6 +98,28 @@ export interface ProviderSpec {
   /** The route's materialized models, in configuration order. */
   models: readonly Model<Api>[]
   /**
+   * How the route relates to the installed catalog. `allowlist` serves exactly
+   * the configured entries; `snapshot` serves the configured entries with
+   * installed-catalog customizations applied; `live` serves the installed
+   * catalog unchanged, so package updates and pi-ai's own dynamic refreshes
+   * reach the selector without reconfiguration.
+   */
+  catalogMode: 'allowlist' | 'snapshot' | 'live'
+  /**
+   * Whether the route admits only zero-priced catalog entries. Applies to the
+   * live catalog on every read; allowlist and snapshot routes were already
+   * filtered at materialization.
+   */
+  freeOnly: boolean
+  /** Route-level wire-compatibility switches, re-applied on every live read. */
+  compat?: PiAiCompatProfile
+  /** Context capacity for a live model neither the entry nor the catalog sizes. */
+  defaultContextWindow: number
+  /** Output capability for a live model neither the entry nor the catalog sizes. */
+  defaultMaxTokens: number
+  /** Modalities for a live model neither the entry nor the catalog declares. */
+  defaultInput: readonly PiAiModality[]
+  /**
    * Whether the profile names a credential, which it does through `apiKeyEnv`
    * alone: configuration carries the reference, never the secret. Only that
    * decides whether {@link routeAuth} adds the harness's own api-key method to
@@ -138,19 +161,59 @@ function routeAuth(spec: ProviderSpec, catalog: Provider | undefined): Provider[
  * Reuse an installed catalog provider with this route's models and identity.
  * Model dispatch stays with the catalog provider, so its API implementations,
  * compatibility quirks, and ambient credential discovery are preserved exactly.
- * Catalog-owned dynamic refresh is dropped: this route's catalog is the
- * settings document, and a background refresh would contradict it.
+ *
+ * An allowlist or snapshot route's catalog is the settings document: its
+ * entries carry configured overrides no refresh may rewrite, so the wrapper
+ * serves the materialized list while still delegating the provider's own
+ * refresh lifecycle. A live route serves the installed catalog unchanged and
+ * reads it on every call, so package updates and dynamic refreshes surface
+ * without reconfiguration.
  */
 function reuseCatalogProvider(base: Provider, spec: ProviderSpec): Provider {
   // Provider-level `baseUrl` is display metadata: pi-ai routes every request
   // through `Model.baseUrl`, which model resolution has already overridden.
   const baseUrl = spec.baseURL ?? base.baseUrl
+  const routeRequest = {
+    provider: spec.provider,
+    ...spec.api === undefined ? {} : { api: spec.api },
+    ...spec.baseURL === undefined ? {} : { baseURL: spec.baseURL },
+    ...spec.compat === undefined ? {} : { compat: spec.compat },
+    defaultContextWindow: spec.defaultContextWindow,
+    defaultMaxTokens: spec.defaultMaxTokens,
+    defaultInput: [...spec.defaultInput] as Model<Api>['input'],
+  }
+  // Live routes re-materialize against each fresh listing, so endpoint and
+  // protocol repoints plus route compat apply to refreshed models exactly as
+  // they did at configuration. An empty listing or an unserviceable one keeps
+  // the last good materialization instead of emptying the selector.
+  const liveModels = (): readonly Model<Api>[] => {
+    const live = base.getModels()
+    if (live.length === 0) return spec.models
+    try {
+      const { models } = resolveRouteModels(routeRequest, new Map(live.map(model => [model.id, model])))
+      return spec.freeOnly ? models.filter(isFreeModel) : models
+    } catch {
+      return spec.models
+    }
+  }
+  // Bound before spreading: delegation keeps the catalog provider the receiver
+  // while satisfying the optional-method shapes `Models.refresh()` probes for.
+  const refreshModels = base.refreshModels?.bind(base)
+  const filterModels = base.filterModels?.bind(base)
   return {
     id: spec.provider,
     name: spec.displayName,
     ...baseUrl === undefined ? {} : { baseUrl },
     auth: routeAuth(spec, base),
-    getModels: () => spec.models,
+    getModels: spec.catalogMode === 'live' ? liveModels : () => spec.models,
+    // Preserved rather than dropped: dynamic catalog providers refresh through
+    // this hook, and `Models.refresh()` skips providers that do not offer it.
+    // Allowlist and snapshot routes keep serving their configured entries; the
+    // delegation keeps the provider's persistence lifecycle maintained.
+    ...refreshModels === undefined ? {} : { refreshModels: (context: RefreshModelsContext) => refreshModels(context) },
+    ...filterModels === undefined ? {} : {
+      filterModels: (models: readonly Model<Api>[], credential: Credential | undefined) => filterModels(models, credential),
+    },
     // Delegated rather than copied: the catalog provider stays the receiver, so
     // an implementation holding state on itself keeps working.
     stream: (model, context, options) => base.stream(model, context, options),

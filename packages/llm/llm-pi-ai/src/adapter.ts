@@ -333,6 +333,19 @@ export class PiAiAdapter extends LlmAdapter {
     })()
   }
 
+  /**
+   * Refresh pi-ai's dynamic provider catalogs through the current collection.
+   * Static catalogs update through the installed package data and are skipped
+   * by the collection; per-provider errors are collected without rejecting, so
+   * a failing provider keeps serving its last good listing until the next poll.
+   * @param signal - aborts the refresh phase.
+   * @returns per-provider refresh errors, empty when every dynamic provider refreshed.
+   */
+  async refreshDynamicCatalogs(signal?: AbortSignal): Promise<ReadonlyMap<string, Error>> {
+    const result = await this.current().models.refresh(signal === undefined ? undefined : { signal })
+    return result.errors
+  }
+
   /** Refresh Atlas's hot-swappable model directory and make its entries routable. */
   private async refreshAtlasModels(profile: ResolvedPiAiProviderProfile): Promise<readonly Model<Api>[]> {
     const cached = this.liveModels.get(profile.provider)

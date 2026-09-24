@@ -20,6 +20,7 @@ import type {
   BedrockCompat,
   ChatTemplateKwargValue,
   KnownApi,
+  MistralConversationsCompat,
   Model,
   ModelCost,
   ModelThinkingLevel,
@@ -27,6 +28,7 @@ import type {
   OpenAIResponsesCompat,
   Provider,
   ThinkingLevelMap,
+  ThinkingTokenBudgetField,
 } from '@earendil-works/pi-ai'
 
 /**
@@ -143,6 +145,7 @@ export type PiAiChatTemplateVar = Extract<ChatTemplateKwargValue, { $var: string
 const CHAT_TEMPLATE_VAR_GATE: Record<PiAiChatTemplateVar, true> = {
   'thinking.enabled': true,
   'thinking.effort': true,
+  'thinking.budget': true,
 }
 
 /** The request-state placeholders a profile may name. */
@@ -229,15 +232,18 @@ const COMPLETIONS_COMPAT_GATE = {
   chatTemplateKwargs: 'offer',
   chatTemplateArgs: 'offer',
   supportsThinkingTokenBudget: 'offer',
+  thinkingTokenBudgetField: 'offer',
+  supportsOpenAIGrammarTools: 'withhold',
+  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoToolAdditions: 'offer',
   supportsStrictMode: 'offer',
+  vllmPriority: 'offer',
   cacheControlFormat: 'offer',
   supportsLongCacheRetention: 'offer',
   openRouterRouting: 'withhold',
   vercelGatewayRouting: 'withhold',
   zaiToolStream: 'withhold',
-  supportsOpenAIGrammarTools: 'withhold',
   sendSessionAffinityHeaders: 'withhold',
-  deferredToolsMode: 'withhold',
   sessionAffinityFormat: 'withhold',
 } as const satisfies Record<keyof OpenAICompletionsCompat, CompatDisposition>
 
@@ -245,6 +251,8 @@ const COMPLETIONS_COMPAT_GATE = {
 const RESPONSES_COMPAT_GATE = {
   supportsDeveloperRole: 'offer',
   supportsStrictMode: 'offer',
+  supportsMidConvoSystemMessages: 'offer',
+  supportsMaxOutputTokens: 'offer',
   supportsLongCacheRetention: 'offer',
   sessionAffinityFormat: 'withhold',
   supportsOpenAIGrammarTools: 'withhold',
@@ -262,9 +270,18 @@ const ANTHROPIC_COMPAT_GATE = {
   forceAdaptiveThinking: 'offer',
   allowEmptySignature: 'offer',
   supportsStrictTools: 'offer',
+  supportsMidConvoEffort: 'offer',
+  supportsMidConvoSystemMessages: 'offer',
+  supportsMidConvoToolChanges: 'offer',
   sendSessionAffinityHeaders: 'withhold',
-  supportsToolReferences: 'withhold',
+  sessionAffinityFormat: 'withhold',
+  allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
+
+/** Disposition of every `MistralConversationsCompat` field; a drift gate like the one above. */
+const MISTRAL_COMPAT_GATE = {
+  supportsMidConvoSystemMessages: 'offer',
+} as const satisfies Record<keyof MistralConversationsCompat, CompatDisposition>
 
 /** Disposition of every `BedrockCompat` field; a drift gate like the one above. */
 const BEDROCK_COMPAT_GATE = {
@@ -296,6 +313,7 @@ const COMPAT_GATES: Readonly<Record<ApiWithCompat, Readonly<Record<string, Compa
   'openai-codex-responses': RESPONSES_COMPAT_GATE,
   'anthropic-messages': ANTHROPIC_COMPAT_GATE,
   'bedrock-converse-stream': BEDROCK_COMPAT_GATE,
+  'mistral-conversations': MISTRAL_COMPAT_GATE,
 }
 
 /**
@@ -379,11 +397,16 @@ export interface PiAiCompatProfile {
   chatTemplateArgs?: NonNullable<OpenAICompletionsCompat['chatTemplateArgs']>
   /** Whether the endpoint accepts `thinking_token_budget` to cap vLLM reasoning; `openai-completions`. */
   supportsThinkingTokenBudget?: boolean
-  /**
-   * Whether the endpoint accepts `strict` in tool definitions;
+  /** Which request field carries the reasoning-token budget; `openai-completions`. */
+  thinkingTokenBudgetField?: ThinkingTokenBudgetField
+  /** Whether the endpoint accepts `strict` in tool definitions;
    * `openai-completions`, the three Responses protocols, `bedrock-converse-stream`.
    */
   supportsStrictMode?: boolean
+  /** vLLM scheduler priority sent as the top-level `priority` request field; `openai-completions`. */
+  vllmPriority?: number
+  /** Whether the exact model accepts the `max_output_tokens` parameter; the three Responses protocols. */
+  supportsMaxOutputTokens?: boolean
   /** Prompt-cache marker convention; `openai-completions`. */
   cacheControlFormat?: NonNullable<OpenAICompletionsCompat['cacheControlFormat']>
   /**
@@ -403,6 +426,14 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Whether the exact model transport supports effort-only system messages and thinking binding controls; `anthropic-messages`. */
+  supportsMidConvoEffort?: boolean
+  /** Whether the exact model accepts system-role messages inside the conversation; `anthropic-messages`, `mistral-conversations`. */
+  supportsMidConvoSystemMessages?: boolean
+  /** Whether the exact model accepts mid-conversation `tool_addition` and `tool_removal` blocks; `anthropic-messages`. */
+  supportsMidConvoToolChanges?: boolean
+  /** Whether system messages can introduce additional tools mid-conversation; `openai-completions`. */
+  supportsMidConvoToolAdditions?: boolean
 }
 
 /** Compile-time constraint that `T` is `never`. */
@@ -426,6 +457,7 @@ type AssertTrue<T extends true> = T
 
 /** Every compat type a gate classifies, merged so one `Pick` reaches all offered fields. */
 type UpstreamCompat = OpenAICompletionsCompat & OpenAIResponsesCompat & AnthropicMessagesCompat & BedrockCompat
+  & MistralConversationsCompat
 
 /**
  * Proof that each documented field carries its upstream type, not a hand-copied
@@ -810,11 +842,16 @@ export interface RouteCatalog {
  * installed catalog unchanged, which is what keeps an existing
  * `providers: { deepseek: { apiKeyEnv: … } }` profile working untouched.
  * @param request - the route-level catalog facts.
+ * @param liveDefaults - installed-catalog defaults replaced by a live listing,
+ *   so a refresh re-materializes the same route against fresh data.
  * @returns the materialized models and the explicitly configured request caps.
  */
-export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+export function resolveRouteModels(
+  request: RouteCatalogRequest,
+  liveDefaults?: ReadonlyMap<string, Model<Api>>,
+): RouteCatalog {
   const { provider } = request
-  const defaults = catalogModels(provider)
+  const defaults = liveDefaults ?? catalogModels(provider)
   const providerBaseUrl = catalogProvider(provider)?.baseUrl
   // An absent `models` key and an empty one are the same request: the config
   // schema materializes `[]` for the absent case, and an empty catalog could

@@ -272,6 +272,13 @@ const compatProfile: z<PiAiCompatProfile> = z.object({
   chatTemplateKwargs: z.dict(chatTemplateKwarg),
   chatTemplateArgs: z.dict(chatTemplateKwarg),
   supportsThinkingTokenBudget: z.boolean(),
+  thinkingTokenBudgetField: z.union(['thinking_token_budget', 'thinking_budget', 'thinking_budget_tokens']),
+  supportsMidConvoSystemMessages: z.boolean(),
+  supportsMidConvoToolAdditions: z.boolean(),
+  supportsMidConvoEffort: z.boolean(),
+  supportsMidConvoToolChanges: z.boolean(),
+  supportsMaxOutputTokens: z.boolean(),
+  vllmPriority: z.number(),
   supportsStrictMode: z.boolean(),
   cacheControlFormat: z.union(CACHE_CONTROL_FORMATS),
   supportsLongCacheRetention: z.boolean(),
@@ -518,6 +525,21 @@ export function resolveProfiles(
         ...source.baseURL === undefined ? {} : { baseURL: source.baseURL },
         models,
         namesCredential: apiKeyEnv !== undefined,
+        // An absent `models` key and an empty one are the same request (the
+        // schema materializes `[]` for the absent case), so both mean the
+        // route serves the installed catalog; overrides alone freeze that
+        // materialization into a snapshot, while a bare catalog route reads it
+        // live so package updates and dynamic refreshes surface unconfigured.
+        catalogMode: source.models !== undefined && source.models.length > 0
+          ? 'allowlist'
+          : source.modelOverrides !== undefined && Object.keys(source.modelOverrides).length > 0
+            ? 'snapshot'
+            : 'live',
+        freeOnly: source.freeOnly === true,
+        ...source.compat === undefined ? {} : { compat: source.compat },
+        defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
+        defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
+        defaultInput,
       }),
     })
   }

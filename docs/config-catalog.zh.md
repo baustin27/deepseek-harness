@@ -33,7 +33,7 @@ export interface AcpConfig {
 
 依赖：`Stream`（`@agentclientprotocol/sdk`）
 
-来源：[`packages/acp/acp/src/index.ts:75`](../packages/acp/acp/src/index.ts)
+来源：[`packages/acp/acp/src/index.ts:77`](../packages/acp/acp/src/index.ts)
 
 <a id="deepseek-aidsh-agent-default-model"></a>
 
@@ -311,7 +311,7 @@ export type Config = LocalConfig
 
 依赖：[`LocalConfig`](#deepseek-aidsh-bash-local)
 
-来源：[`packages/shell/bash-sandbox/src/index.ts:35`](../packages/shell/bash-sandbox/src/index.ts)
+来源：[`packages/shell/bash-sandbox/src/index.ts:36`](../packages/shell/bash-sandbox/src/index.ts)
 
 <a id="deepseek-aidsh-client-connection"></a>
 
@@ -1037,6 +1037,8 @@ export interface PiAiProviderProfile {
   apiKeyEnv?: string
   /** Name shown by configuration surfaces; defaults to the route key. */
   displayName?: string
+  /** Restrict this route to catalog models whose complete token price is zero. */
+  freeOnly?: boolean
   /**
    * Wire protocol every model on this route speaks. Omission keeps each
    * installed catalog model's own protocol, which is why a catalog route needs
@@ -1095,6 +1097,10 @@ export interface PiAiProviderProfile {
   headers?: Record<string, string>
   /** Provider-neutral pi-ai reasoning level. */
   reasoning?: ModelThinkingLevel
+  /** Maximum output tokens for tool-calling turns; defaults to 4096 on Atlas routes. */
+  toolCallMaxTokens?: number
+  /** Sampling temperature for tool-calling turns; defaults to 0 on Atlas routes. */
+  toolCallTemperature?: number
   /** Token budgets used by reasoning providers that support them. */
   thinkingBudgets?: ThinkingBudgets
   /** Prompt-cache retention preference. */
@@ -1105,8 +1111,10 @@ export interface PiAiProviderProfile {
   timeoutMs?: number
   /** WebSocket connection timeout in milliseconds. */
   websocketConnectTimeoutMs?: number
-  /** Maximum provider idle time while one stream read is outstanding. */
-  streamIdleTimeoutMs?: number
+  /** Maximum provider idle time while one stream read is outstanding, or `false` to leave stream lifetime to caller cancellation. */
+  streamIdleTimeoutMs?: number | false
+  /** Per-model overrides for {@link streamIdleTimeoutMs}; an unknown model id is refused during profile resolution. */
+  streamIdleTimeoutByModel?: Record<string, number | false>
   /**
    * Maximum base64-encoded image payload per request. When a request's
    * accumulated images exceed it, the oldest images are replaced by text
@@ -1233,11 +1241,16 @@ export interface PiAiCompatProfile {
   chatTemplateArgs?: NonNullable<OpenAICompletionsCompat['chatTemplateArgs']>
   /** Whether the endpoint accepts `thinking_token_budget` to cap vLLM reasoning; `openai-completions`. */
   supportsThinkingTokenBudget?: boolean
-  /**
-   * Whether the endpoint accepts `strict` in tool definitions;
+  /** Which request field carries the reasoning-token budget; `openai-completions`. */
+  thinkingTokenBudgetField?: ThinkingTokenBudgetField
+  /** Whether the endpoint accepts `strict` in tool definitions;
    * `openai-completions`, the three Responses protocols, `bedrock-converse-stream`.
    */
   supportsStrictMode?: boolean
+  /** vLLM scheduler priority sent as the top-level `priority` request field; `openai-completions`. */
+  vllmPriority?: number
+  /** Whether the exact model accepts the `max_output_tokens` parameter; the three Responses protocols. */
+  supportsMaxOutputTokens?: boolean
   /** Prompt-cache marker convention; `openai-completions`. */
   cacheControlFormat?: NonNullable<OpenAICompletionsCompat['cacheControlFormat']>
   /**
@@ -1257,6 +1270,14 @@ export interface PiAiCompatProfile {
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
+  /** Whether the exact model transport supports effort-only system messages and thinking binding controls; `anthropic-messages`. */
+  supportsMidConvoEffort?: boolean
+  /** Whether the exact model accepts system-role messages inside the conversation; `anthropic-messages`, `mistral-conversations`. */
+  supportsMidConvoSystemMessages?: boolean
+  /** Whether the exact model accepts mid-conversation `tool_addition` and `tool_removal` blocks; `anthropic-messages`. */
+  supportsMidConvoToolChanges?: boolean
+  /** Whether system messages can introduce additional tools mid-conversation; `openai-completions`. */
+  supportsMidConvoToolAdditions?: boolean
 }
 
 /** One request modality a pi-ai model may accept. */
@@ -1276,9 +1297,9 @@ export type PiAiReasoningEfforts = Partial<Record<ModelThinkingLevel, string | n
 export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFormat']>
 ```
 
-依赖：`Api`（`@earendil-works/pi-ai`）· `CacheRetention`（`@earendil-works/pi-ai`）· `Model`（`@earendil-works/pi-ai`）· `ModelThinkingLevel`（`@earendil-works/pi-ai`）· `OpenAICompletionsCompat`（`@earendil-works/pi-ai`）· [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets`（`@earendil-works/pi-ai`）· `Transport`（`@earendil-works/pi-ai`)
+依赖：`Api`（`@earendil-works/pi-ai`）· `CacheRetention`（`@earendil-works/pi-ai`）· `Model`（`@earendil-works/pi-ai`）· `ModelThinkingLevel`（`@earendil-works/pi-ai`）· `OpenAICompletionsCompat`（`@earendil-works/pi-ai`）· [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets`（`@earendil-works/pi-ai`）· `ThinkingTokenBudgetField`（`@earendil-works/pi-ai`）· `Transport`（`@earendil-works/pi-ai`)
 
-来源：[`packages/llm/llm-pi-ai/src/config.ts:213`](../packages/llm/llm-pi-ai/src/config.ts)
+来源：[`packages/llm/llm-pi-ai/src/config.ts:227`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 
@@ -1511,9 +1532,10 @@ export interface Config {
 /** The {@link PermissionPresetService} config: preset table and composition default. */
 export interface Config {
   /**
-   * The preset table: name → knob bundle. Defaults to `workspace-write`
-   * (workspace-write + ask) and `danger-full-access` (danger-full-access +
-   * never). The name `custom` is reserved for the derived not-a-preset state.
+   * The preset table: name → execution-profile/approval bundle. Defaults to
+   * `developer-host-access` (direct host access + never), plus the explicit
+   * `read-only`, `workspace-write`, and `danger-full-access` sandbox opt-downs.
+   * The name `custom` is reserved for the derived not-a-preset state.
    */
   presets?: Record<string, PresetSpec>
   /**
@@ -1523,10 +1545,12 @@ export interface Config {
   defaultPreset?: string
 }
 
-/** One preset's sandbox/approval bundle and optional client presentation. */
+/** One execution-profile/approval bundle and optional sandbox compatibility value. */
 export interface PresetSpec {
-  /** The `sandbox/mode` value the preset writes through. */
-  sandbox: SandboxMode
+  /** The host profile or explicit sandbox opt-down this preset selects. */
+  executionProfile?: ExecutionProfile
+  /** The `sandbox/mode` value the preset writes through for sandbox profiles. */
+  sandbox?: SandboxMode
   /** The `approval/policy` value the preset writes through. */
   approval: ApprovalPolicy
   /** The display label a client shows for this preset; the raw table key when omitted. */
@@ -1536,9 +1560,9 @@ export interface PresetSpec {
 }
 ```
 
-依赖：[`ApprovalPolicy`](subsystems/approval.zh.md) · [`SandboxMode`](subsystems/sandbox.zh.md)
+依赖：[`ApprovalPolicy`](subsystems/approval.zh.md) · [`ExecutionProfile`](../packages/sandbox/sandbox/src/index.ts) · [`SandboxMode`](subsystems/sandbox.zh.md)
 
-来源：[`packages/interaction/permission-presets/src/index.ts:143`](../packages/interaction/permission-presets/src/index.ts)
+来源：[`packages/interaction/permission-presets/src/index.ts:166`](../packages/interaction/permission-presets/src/index.ts)
 
 <a id="deepseek-aidsh-persona"></a>
 
@@ -1649,7 +1673,7 @@ export type Config = LocalConfig
 
 依赖：[`LocalConfig`](#deepseek-aidsh-pwsh-local)
 
-来源：[`packages/shell/pwsh-sandbox/src/index.ts:40`](../packages/shell/pwsh-sandbox/src/index.ts)
+来源：[`packages/shell/pwsh-sandbox/src/index.ts:41`](../packages/shell/pwsh-sandbox/src/index.ts)
 
 <a id="deepseek-aidsh-repeat-tool-reminder"></a>
 
@@ -1715,7 +1739,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/sandbox/sandbox-local/src/index.ts:44`](../packages/sandbox/sandbox-local/src/index.ts)
+来源：[`packages/sandbox/sandbox-local/src/index.ts:53`](../packages/sandbox/sandbox-local/src/index.ts)
 
 <a id="deepseek-aidsh-sandbox-policy"></a>
 
@@ -1732,7 +1756,9 @@ export interface Config {
  * is any per-family knob: this is the one shared policy home.
  */
 export interface Config {
-  /** File-sandbox mode a session starts from (default: `read-only`). */
+  /** Default execution profile; host access is used when omitted. */
+  executionProfile?: ExecutionProfile
+  /** Legacy explicit sandbox opt-down; equivalent to `executionProfile` when set. */
   mode?: SandboxMode
   /**
    * Fallback root for agentless calls and sessions without a cwd (default:
@@ -1742,9 +1768,9 @@ export interface Config {
 }
 ```
 
-依赖：[`SandboxMode`](subsystems/sandbox.zh.md)
+依赖：[`ExecutionProfile`](../packages/sandbox/sandbox/src/index.ts) · [`SandboxMode`](subsystems/sandbox.zh.md)
 
-来源：[`packages/sandbox/sandbox-policy/src/index.ts:70`](../packages/sandbox/sandbox-policy/src/index.ts)
+来源：[`packages/sandbox/sandbox-policy/src/index.ts:104`](../packages/sandbox/sandbox-policy/src/index.ts)
 
 <a id="deepseek-aidsh-sdk-app"></a>
 
