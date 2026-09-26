@@ -161,6 +161,43 @@ describe('the authorization Remote namespace a configuration surface calls', () 
     expect(frames.at(-1)).toMatchObject({ type: 'failed' })
   })
 
+  it('accepts a repeated answer for an already-answered prompt', async () => {
+    const { ctx, controller } = await boot()
+    ctx.authorization.registerFlow(deviceFlow(ctx))
+    let promptId = ''
+    let attemptId = ''
+    const frames = await collect(controller, { key: KEY_STRING }, async (frame) => {
+      if (frame.type === 'started') attemptId = frame.attemptId
+      if (frame.type !== 'prompt') return
+      promptId = frame.promptId
+      // The double submit: the second answer races the accepted first.
+      await expect(controller.answer({ attemptId, promptId, value: 'confirmed' }))
+        .resolves.toEqual({ accepted: true })
+      await expect(controller.answer({ attemptId, promptId, value: 'confirmed' }))
+        .resolves.toEqual({ accepted: true })
+    })
+    expect(promptId.length).toBeGreaterThan(0)
+    expect(frames.at(-1)).toEqual({ type: 'settled', status: 'authorized' })
+  })
+
+  it('still refuses a prompt id the attempt never issued', async () => {
+    const { ctx, controller } = await boot()
+    ctx.authorization.registerFlow(deviceFlow(ctx))
+    let attemptId = ''
+    let answered = false
+    const frames = await collect(controller, { key: KEY_STRING }, async (frame) => {
+      if (frame.type === 'started') attemptId = frame.attemptId
+      if (frame.type !== 'prompt' || answered) return
+      answered = true
+      const failure = await controller
+        .answer({ attemptId, promptId: 'never-issued', value: 'x' })
+        .catch((error: unknown) => error)
+      expect(remoteErrorOf(failure)).toMatchObject({ code: 'gateway/bad-request' })
+      await controller.answer({ attemptId, promptId: frame.promptId, value: 'confirmed' })
+    })
+    expect(frames.at(-1)).toEqual({ type: 'settled', status: 'authorized' })
+  })
+
   it('rejects unparsable keys and unknown attempts without starting anything', async () => {
     const { controller } = await boot()
     for (const call of [

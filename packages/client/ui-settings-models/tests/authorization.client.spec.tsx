@@ -127,8 +127,7 @@ describe('AuthorizationSection', () => {
     await waitFor(() => { expect(screen.getByText(en.authConnected)).toBeTruthy() })
   })
 
-  it('withdraws the attempt when the human cancels', async () => {
-    const gate = deferred<string>()
+  it('withdraws the attempt when the human cancels', async () => {    const gate = deferred<string>()
     const remote: AuthorizationRemote = {
       list: () => Promise.resolve(flowsResponse([codexFlow()])),
       run: () => (async function *(): AsyncGenerator<AuthorizationFrame> {
@@ -172,5 +171,86 @@ describe('AuthorizationSection', () => {
     })
     await waitFor(() => { expect(screen.getByText('provider exploded')).toBeTruthy() })
     expect(screen.getByText('Codex')).toBeTruthy()
+  })
+
+  it('sends one answer for a double submit', async () => {
+    const gate = deferred<string>()
+    const answer = vi.fn((_request: { attemptId: string; promptId: string; value: string }) => {
+      gate.resolve(_request.value)
+      return Promise.resolve({ ok: true as const, value: { accepted: true } })
+    })
+    const remote: AuthorizationRemote = {
+      list: () => Promise.resolve(flowsResponse([codexFlow()])),
+      run: () => (async function *(): AsyncGenerator<AuthorizationFrame> {
+        yield { type: 'started', attemptId: 'attempt-3', key: 'llm-pi-ai/openai-codex' }
+        yield { type: 'prompt', promptId: 'prompt-3', prompt: { kind: 'text', message: 'Name?' } }
+        await gate.promise
+        yield { type: 'settled', status: 'authorized' }
+      })(),
+      answer,
+      cancel: () => Promise.resolve({ ok: true, value: { cancelled: true } }),
+    }
+    mount(remote)
+    await waitFor(() => { expect(screen.getByText('Codex')).toBeTruthy() })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: en.authSignIn }))
+    })
+    await waitFor(() => { expect(screen.getByText('Name?')).toBeTruthy() })
+    const input = document.querySelector('label input') as HTMLInputElement | null
+    expect(input).not.toBeNull()
+    await act(async () => {
+      fireEvent.change(input!, { target: { value: 'typed' } })
+      const form = input!.closest('form')!
+      // The double submit: Enter plus an immediate second submit.
+      fireEvent.submit(form)
+      fireEvent.submit(form)
+    })
+    await waitFor(() => { expect(screen.getByText(en.authAuthorized)).toBeTruthy() })
+    expect(answer).toHaveBeenCalledTimes(1)
+  })
+
+  it('holds the prompt when an answer is refused instead of failing', async () => {
+    const gate = deferred<string>()
+    let calls = 0
+    const remote: AuthorizationRemote = {
+      list: () => Promise.resolve(flowsResponse([codexFlow()])),
+      run: () => (async function *(): AsyncGenerator<AuthorizationFrame> {
+        yield { type: 'started', attemptId: 'attempt-4', key: 'llm-pi-ai/openai-codex' }
+        yield { type: 'prompt', promptId: 'prompt-4', prompt: { kind: 'text', message: 'Name?' } }
+        await gate.promise
+        yield { type: 'settled', status: 'authorized' }
+      })(),
+      answer: () => {
+        calls += 1
+        // The first submit races a stale prompt and is refused; the retry is
+        // accepted and releases the settlement.
+        if (calls === 1) {
+          return Promise.resolve({ ok: false as const, error: { message: 'no pending prompt' } })
+        }
+        gate.resolve('typed')
+        return Promise.resolve({ ok: true as const, value: { accepted: true } })
+      },
+      cancel: () => Promise.resolve({ ok: true, value: { cancelled: true } }),
+    }
+    mount(remote)
+    await waitFor(() => { expect(screen.getByText('Codex')).toBeTruthy() })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: en.authSignIn }))
+    })
+    await waitFor(() => { expect(screen.getByText('Name?')).toBeTruthy() })
+    const input = document.querySelector('label input') as HTMLInputElement | null
+    expect(input).not.toBeNull()
+    await act(async () => {
+      fireEvent.change(input!, { target: { value: 'typed' } })
+      fireEvent.click(screen.getByRole('button', { name: en.authContinue }))
+    })
+    // The refusal is benign: the prompt stays for another try and the later
+    // settlement still completes the attempt.
+    await waitFor(() => { expect(screen.getByText('Name?')).toBeTruthy() })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: en.authContinue }))
+    })
+    await waitFor(() => { expect(screen.getByText(en.authAuthorized)).toBeTruthy() })
+    expect(calls).toBe(2)
   })
 })

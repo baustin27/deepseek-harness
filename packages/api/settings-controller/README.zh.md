@@ -31,7 +31,7 @@ kind: "package-reference"
 
 `settings.openSettingsDocument()` 准备 provider 持有的文档，并用原生文本编辑器意图将其打开。`settings.canOpenAgentPresetDirectory()` 在 preset 页面显示时报告原生打开能力。`settings.openAgentPresetDirectory(id)` 只解析用户创作的 preset，并在原生打开不可用时返回目录路径；两个打开方法都不接受浏览器提供的文件系统目标。
 
-`authorization.list()` 报告每个已注册登录流程及其已配置与进行中状态。`authorization.run(key)` 以 started/notice/prompt 帧加唯一终态帧流式传输一次尝试；`authorization.answer()` 回复一次提示，`authorization.cancel()` 撤回尝试。通知与提示不携带密钥，授权本身也从不跨越 wire：流程将其提交到宿主凭据存储。对未知尝试作答或取消、或给出畸形 key，会以 `bad-request` 失败；未挂载授权服务时调用会以 `gateway/internal` 失败。
+`authorization.list()` 报告每个已注册登录流程及其已配置与进行中状态。`authorization.run(key)` 以 started/notice/prompt 帧加唯一终态帧流式传输一次尝试；`authorization.answer()` 回复一次提示，`authorization.cancel()` 撤回尝试。同一提示的重复作答幂等成功，不会使尝试失败。通知与提示不携带密钥，授权本身也从不跨越 wire：流程将其提交到宿主凭据存储。对未知尝试作答或取消、或给出畸形 key，会以 `bad-request` 失败；未挂载授权服务时调用会以 `gateway/internal` 失败。
 
 -----
 

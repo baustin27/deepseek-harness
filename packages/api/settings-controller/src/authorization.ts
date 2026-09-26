@@ -62,6 +62,8 @@ interface Attempt {
   readonly key: string
   readonly controller: AbortController
   readonly pending: Map<string, PendingPrompt>
+  /** Prompts already answered: a repeated submit resolves benignly below. */
+  readonly answered: Set<string>
 }
 
 /**
@@ -149,7 +151,7 @@ export class AuthorizationController extends TypertRemoteService {
     const authorization = this.authorization()
     const attemptId = randomUUID()
     const controller = new AbortController()
-    const attempt: Attempt = { key: parsed.key, controller, pending: new Map() }
+    const attempt: Attempt = { key: parsed.key, controller, pending: new Map(), answered: new Set() }
     this.attempts.set(attemptId, attempt)
     // The carrier withdrawing the stream aborts the attempt like an explicit
     // cancel: without this a disconnected page would leak its attempt entry.
@@ -226,7 +228,10 @@ export class AuthorizationController extends TypertRemoteService {
   }
 
   /**
-   * Answer one prompt previously emitted by an authorization attempt.
+   * Answer one prompt previously emitted by an authorization attempt. Answers
+   * are idempotent per prompt: a repeated submit (double-click, Enter-plus-click
+   * race) resolves benignly instead of failing an attempt whose prompt the
+   * first answer already consumed.
    * @param request - the attempt, the prompt, and the human's reply.
    * @throws RemoteError when the request is invalid or names nothing pending.
    */
@@ -236,6 +241,7 @@ export class AuthorizationController extends TypertRemoteService {
     const attempt = this.attempts.get(parsed.attemptId)
     const pending = attempt?.pending.get(parsed.promptId)
     if (pending === undefined) {
+      if (attempt !== undefined && attempt.answered.has(parsed.promptId)) return { accepted: true }
       throw new RemoteError(
         'gateway/bad-request',
         `no pending prompt "${parsed.promptId}" for attempt "${parsed.attemptId}"`,
@@ -243,6 +249,7 @@ export class AuthorizationController extends TypertRemoteService {
       )
     }
     attempt?.pending.delete(parsed.promptId)
+    attempt?.answered.add(parsed.promptId)
     pending.resolve(parsed.value)
     return { accepted: true }
   }

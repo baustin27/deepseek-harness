@@ -198,6 +198,10 @@ export function AuthorizationSection({ remote, t }: AuthorizationSectionProps): 
   const [active, setActive] = useState<ActiveAttempt | undefined>(undefined)
   const activeRef = useRef<ActiveAttempt | undefined>(undefined)
   activeRef.current = active
+  // Prompts already submitted: the guard runs synchronously in the submit
+  // handler, so a double-click or Enter-plus-click race cannot send twice
+  // before the re-render disables the form.
+  const submittedRef = useRef<ReadonlySet<string>>(new Set())
 
   const refresh = (): void => {
     void remote.list().then((response) => {
@@ -251,22 +255,37 @@ export function AuthorizationSection({ remote, t }: AuthorizationSectionProps): 
     const prompt = current?.prompt
     const attemptId = current?.attemptId
     if (current === undefined || prompt === undefined || attemptId === undefined || current.outcome !== undefined) return
+    if (submittedRef.current.has(prompt.promptId)) return
+    submittedRef.current = new Set([...submittedRef.current, prompt.promptId])
+    const unsubmit = (): void => {
+      submittedRef.current = new Set([...submittedRef.current].filter(id => id !== prompt.promptId))
+    }
     setActive({ ...current, busy: true })
     void remote.answer({ attemptId, promptId: prompt.promptId, value }).then((response) => {
       if (!response.ok) {
-        stopAttempt('failed', response.error.message)
+        // A refusal names a prompt the Host no longer holds: a duplicate that
+        // raced an accepted submit, or an answer that arrived after settling.
+        // Either way the attempt itself continues — the next frame decides the
+        // outcome — so hold the prompt for another try instead of failing.
+        unsubmit()
+        setActive(latest => latest === undefined ? latest : { ...latest, busy: false })
         return
       }
       // The answer was accepted; the next frame arrives on the open stream.
       // Clear the prompt optimistically so a repeated submit cannot double-send.
       setActive(latest => latest === undefined ? latest : { ...latest, prompt: undefined, busy: false })
-    }).catch((error: unknown) => {
-      stopAttempt('failed', error instanceof Error ? error.message : String(error))
+    }).catch(() => {
+      // Transport failure is ambiguous — the answer may still have arrived,
+      // and the Host accepts a repeated submit benignly — so hold the prompt
+      // for another try rather than failing the attempt.
+      unsubmit()
+      setActive(latest => latest === undefined ? latest : { ...latest, busy: false })
     })
   }
 
   const startAttempt = (flow: AuthorizationFlowView): void => {
     if (activeRef.current !== undefined) return
+    submittedRef.current = new Set()
     const method = methods[flow.key] ?? flow.methods[0]?.id ?? ''
     const controller = new AbortController()
     const attempt: ActiveAttempt = {
