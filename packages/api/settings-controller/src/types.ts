@@ -32,8 +32,84 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 export interface SettingsDocumentOpenValue {
   readonly opened: true
 }
-
 /** Result of opening or revealing one locally authored Agent preset directory. */
 export type AgentPresetDirectoryOpenValue =
   | { readonly opened: true }
   | { readonly opened: false; readonly path: string }
+
+/** One browser-safe method offered by an authorization flow. */
+export interface AuthorizationMethodView {
+  readonly id: string
+  readonly label: string
+}
+
+/** One browser-safe view of a host authorization flow. */
+export interface AuthorizationFlowView {
+  /** The credential record addressed by this flow. */
+  readonly key: string
+  /** Human-facing name of the provider or account. */
+  readonly label: string
+  /** Methods the flow can run, in preference order. */
+  readonly methods: readonly AuthorizationMethodView[]
+  /** Whether the host credential store currently contains a grant. */
+  readonly configured: boolean
+  /** Whether another attempt for this key is currently running. */
+  readonly inFlight: boolean
+}
+
+/** A browser-safe select option for an authorization prompt. */
+export interface AuthorizationPromptOptionView {
+  readonly id: string
+  readonly label: string
+  readonly description?: string
+}
+
+/** A prompt frame with all host-only cancellation signals removed. */
+export type AuthorizationPromptView = {
+  readonly message: string
+  readonly placeholder?: string
+} & ({
+  readonly kind: 'text' | 'secret'
+} | {
+  readonly kind: 'select'
+  readonly options: readonly AuthorizationPromptOptionView[]
+})
+
+/** Frames delivered while one browser authorization attempt is running. */
+export type AuthorizationFrame =
+  | { readonly type: 'started'; readonly attemptId: string; readonly key: string }
+  | {
+    readonly type: 'notice'
+    readonly notice: { readonly message: string; readonly url?: string; readonly code?: string }
+  }
+  | { readonly type: 'prompt'; readonly promptId: string; readonly prompt: AuthorizationPromptView }
+  | { readonly type: 'settled'; readonly status: 'authorized' | 'cancelled' }
+  | { readonly type: 'failed'; readonly code?: string; readonly message: string }
+
+/** Input starting one streamed browser authorization conversation. */
+export interface AuthorizationRunRequest {
+  readonly key: string
+  readonly method?: string
+}
+
+/** Answer to one prompt previously emitted by an authorization attempt. */
+export interface AuthorizationAnswerRequest {
+  readonly attemptId: string
+  readonly promptId: string
+  readonly value: string
+}
+
+/** Cancellation request for one authorization attempt. */
+export interface AuthorizationCancelRequest {
+  readonly attemptId: string
+}
+
+/** Acknowledgement for an accepted prompt answer. */
+export interface AuthorizationAnswerValue {
+  readonly accepted: true
+}
+
+/** Acknowledgement for a cancellation request. */
+export interface AuthorizationCancelValue {
+  readonly cancelled: true
+}

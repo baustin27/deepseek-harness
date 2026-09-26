@@ -229,7 +229,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/api/settings-controller/src/index.ts:36`](../packages/api/settings-controller/src/index.ts)
+来源：[`packages/api/settings-controller/src/index.ts:39`](../packages/api/settings-controller/src/index.ts)
 
 <a id="deepseek-aidsh-attachment-local"></a>
 
@@ -331,12 +331,20 @@ export interface ConnectionConfig {
    * bind. An entry that is not a bare, canonical authority fails plugin load.
    */
   trustedHosts?: string[]
+  /**
+   * Authorities exempt from browser-session authentication on `/` and `/api`.
+   * Same format as `trustedHosts`: exact `host:port` or port-less `host` matching
+   * any port. The Host/Origin trust fence still runs first; a bypass-listed host
+   * that passes the fence skips cookie/token checks. Use only for LAN boundaries
+   * you control — Host is client-controlled and must never be a public DNS name.
+   */
+  browserAuthBypassHosts?: string[]
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
 }
-```
+``````
 
 来源：[`packages/client/connection/src/index.ts:71`](../packages/client/connection/src/index.ts)
 
