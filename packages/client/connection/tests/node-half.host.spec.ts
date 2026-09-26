@@ -81,7 +81,7 @@ function fakeResponse(): {
   return { response, state }
 }
 
-async function mounted(config?: { trustedHosts?: string[] }): Promise<{
+async function mounted(config?: { trustedHosts?: string[]; browserAuthBypassHosts?: string[] }): Promise<{
   routes: WebRoute[]
   upgrades: WebUpgradeRoute[]
   connection: HostConnectionHandle
@@ -235,6 +235,59 @@ describe('connection node half', () => {
       host: 'harness.example',
       cookie: browserCookie(connection, 'harness.example'),
     }))).toBeUndefined()
+    await dispose()
+  })
+
+  it('bypasses authentication for listed bypass hosts that pass the trust fence', async () => {
+    const { connection, dispose } = await mounted({
+      trustedHosts: ['harness.example'],
+      browserAuthBypassHosts: ['harness.example'],
+    })
+    // No cookie, no token - but authority is in bypassHosts and trustedHosts
+    const bypassRequest = fakeRequest({ host: 'harness.example' })
+    expect(connection.requestRejection(bypassRequest)).toBeUndefined()
+    await dispose()
+  })
+
+  it('bypasses authentication for port-less bypass host matching any port', async () => {
+    const { connection, dispose } = await mounted({
+      trustedHosts: ['harness.example'],
+      browserAuthBypassHosts: ['harness.example'],
+    })
+    const bypassRequest = fakeRequest({ host: 'harness.example:9999' })
+    expect(connection.requestRejection(bypassRequest)).toBeUndefined()
+    await dispose()
+  })
+
+  it('still rejects bypass host that fails the trust fence', async () => {
+    const { connection, dispose } = await mounted({
+      trustedHosts: ['harness.example'],
+      browserAuthBypassHosts: ['evil.example'],
+    })
+    const request = fakeRequest({ host: 'evil.example' })
+    expect(connection.requestRejection(request)).toBe(403)
+    await dispose()
+  })
+
+  it('bypasses cookie/token exchange on / for bypass hosts', async () => {
+    const { connection, dispose } = await mounted({
+      trustedHosts: ['harness.example'],
+      browserAuthBypassHosts: ['harness.example'],
+    })
+    // Should return true (index served) without token exchange
+    const res = fakeResponse()
+    const allowed = connection.authorizeIndex(fakeRequest({ host: 'harness.example' }), res.response)
+    expect(allowed).toBe(true)
+    await dispose()
+  })
+
+  it('bypasses authorization on /api for bypass hosts', async () => {
+    const { connection, dispose } = await mounted({
+      trustedHosts: ['harness.example'],
+      browserAuthBypassHosts: ['harness.example'],
+    })
+    const request = fakeRequest({ host: 'harness.example' }, `${API_PATH}/session.list`)
+    expect(connection.requestRejection(request)).toBeUndefined()
     await dispose()
   })
 

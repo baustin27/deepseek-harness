@@ -6,6 +6,7 @@ import {
   RpcId,
   type ClientRequest,
   type RpcId as RpcIdType,
+  requestAuthority,
 } from './rpc.ts'
 import { clientRequestSchema } from './rpc-schema.ts'
 import { bridge } from './http-bridge.ts'
@@ -66,11 +67,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
    * @param browserAuth - process token and persistent browser-session owner.
+   * @param bypassHosts - authorities exempt from browser-session authentication; empty disables the bypass.
    */
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    private readonly bypassHosts: readonly string[] = [],
   ) {
     super(ctx, 'connection')
   }
@@ -93,14 +96,31 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
   }
 
-  /** Apply the configured Host/Origin fence, then browser authentication. */
+  /** Check if the request authority matches a bypass host. */
+  private isBypassHost(request: ConnectionTrustRequest): boolean {
+    const authority = requestAuthority(request.headers)
+    if (authority === undefined) return false
+    for (const bypass of this.bypassHosts) {
+      if (bypass.includes(':')) {
+        if (authority === bypass) return true
+      } else {
+        const hostPart = authority.split(':')[0]
+        if (hostPart === bypass) return true
+      }
+    }
+    return false
+  }
+
+  /** Apply the configured Host/Origin fence, then browser authentication (unless bypassed). */
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
     if (!isTrustedApiRequest(request, this.trustedHosts)) return 403
+    if (this.isBypassHost(request)) return undefined
     return this.browserAuth.isAuthenticated(request) ? undefined : 401
   }
 
-  /** Authenticate an index request through the process-token exchange or cookie. */
+  /** Authenticate an index request through the process-token exchange or cookie (unless bypassed). */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
+    if (this.isBypassHost(request)) return true
     return this.browserAuth.authorizeIndex(request, response)
   }
 

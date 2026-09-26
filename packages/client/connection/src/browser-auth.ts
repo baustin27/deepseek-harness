@@ -67,7 +67,7 @@ function header(
 }
 
 /** Canonical request authority used as the cookie name and signed audience. */
-function requestAuthority(headers: ConnectionTrustRequest['headers']): string | undefined {
+export function requestAuthority(headers: ConnectionTrustRequest['headers']): string | undefined {
   const host = header(headers, 'host')
   if (host === undefined) return undefined
   try {
